@@ -21,7 +21,7 @@ func TestRegisterWithNoName(t *testing.T) {
 	h, err := New()
 	require.NoError(t, err)
 
-	err = h.Register(Config{
+	err = h.Register(CheckConfig{
 		Name: "",
 		Check: func(context.Context) error {
 			return nil
@@ -36,7 +36,7 @@ func TestDoubleRegister(t *testing.T) {
 
 	healthCheckName := "health-check"
 
-	conf := Config{
+	conf := CheckConfig{
 		Name: healthCheckName,
 		Check: func(context.Context) error {
 			return nil
@@ -49,7 +49,7 @@ func TestDoubleRegister(t *testing.T) {
 	err = h.Register(conf)
 	assert.Error(t, err, "the second registration of a health check config should return an error, but did not")
 
-	err = h.Register(Config{
+	err = h.Register(CheckConfig{
 		Name: healthCheckName,
 		Check: func(context.Context) error {
 			return errors.New("health checks registered")
@@ -66,20 +66,20 @@ func TestHealthHandler(t *testing.T) {
 	req, err := http.NewRequest("GET", "http://localhost/status", nil)
 	require.NoError(t, err)
 
-	err = h.Register(Config{
+	err = h.Register(CheckConfig{
 		Name:      "rabbitmq",
 		SkipOnErr: true,
 		Check:     func(context.Context) error { return errors.New(checkErr) },
 	})
 	require.NoError(t, err)
 
-	err = h.Register(Config{
+	err = h.Register(CheckConfig{
 		Name:  "mongodb",
 		Check: func(context.Context) error { return nil },
 	})
 	require.NoError(t, err)
 
-	err = h.Register(Config{
+	err = h.Register(CheckConfig{
 		Name:      "snail-service",
 		SkipOnErr: true,
 		Timeout:   time.Second * 1,
@@ -93,13 +93,13 @@ func TestHealthHandler(t *testing.T) {
 	handler := h.Handler()
 	handler.ServeHTTP(res, req)
 
-	assert.Equal(t, http.StatusOK, res.Code, "status handler returned wrong status code")
+	assert.Equal(t, http.StatusOK, res.Code, "check handler returned wrong check code")
 
 	body := make(map[string]interface{})
 	err = json.NewDecoder(res.Body).Decode(&body)
 	require.NoError(t, err)
 
-	assert.Equal(t, string(StatusWarning), body["status"], "body returned wrong status")
+	assert.Equal(t, string(StatusWarning), body["check"], "body returned wrong check")
 
 	failure, ok := body["failures"]
 	assert.True(t, ok, "body returned nil failures field")
@@ -107,12 +107,12 @@ func TestHealthHandler(t *testing.T) {
 	f, ok := failure.(map[string]interface{})
 	assert.True(t, ok, "body returned nil failures.rabbitmq field")
 
-	assert.Equal(t, checkErr, f["rabbitmq"], "body returned wrong status for rabbitmq")
-	assert.Equal(t, string(StatusTimeout), f["snail-service"], "body returned wrong status for snail-service")
+	assert.Equal(t, checkErr, f["rabbitmq"], "body returned wrong check for rabbitmq")
+	assert.Equal(t, string(StatusTimeout), f["snail-service"], "body returned wrong check for snail-service")
 }
 
 func TestHealth_Measure(t *testing.T) {
-	h, err := New(WithChecks(Config{
+	h, err := New(WithChecks(CheckConfig{
 		Name:      "check1",
 		Timeout:   time.Second,
 		SkipOnErr: false,
@@ -120,7 +120,7 @@ func TestHealth_Measure(t *testing.T) {
 			time.Sleep(time.Second * 10)
 			return errors.New("check1")
 		},
-	}, Config{
+	}, CheckConfig{
 		Name:      "check2",
 		Timeout:   time.Second * 2,
 		SkipOnErr: false,

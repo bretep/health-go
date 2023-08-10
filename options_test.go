@@ -16,17 +16,17 @@ func TestWithChecks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, h1.checks, 0)
 
-	h2, err := New(WithChecks(Config{
+	h2, err := New(WithChecks(CheckConfig{
 		Name: "foo",
-	}, Config{
+	}, CheckConfig{
 		Name: "bar",
 	}))
 	require.NoError(t, err)
 	assert.Len(t, h2.checks, 2)
 
-	_, err = New(WithChecks(Config{
+	_, err = New(WithChecks(CheckConfig{
 		Name: "foo",
-	}, Config{
+	}, CheckConfig{
 		Name: "foo",
 	}))
 	require.Error(t, err)

@@ -15,7 +15,7 @@ import (
 func main() {
 	h, _ := health.New(health.WithSystemInfo())
 	// custom health check example (fail)
-	h.Register(health.Config{
+	h.Register(health.CheckConfig{
 		Name:      "some-custom-check-fail",
 		Timeout:   time.Second * 5,
 		SkipOnErr: true,
@@ -25,13 +25,13 @@ func main() {
 	})
 
 	// custom health check example (success)
-	h.Register(health.Config{
+	h.Register(health.CheckConfig{
 		Name:  "some-custom-check-success",
 		Check: func(context.Context) health.CheckResponse { return health.CheckResponse{} },
 	})
 
 	// http health check example
-	h.Register(health.Config{
+	h.Register(health.CheckConfig{
 		Name:      "http-check",
 		Timeout:   time.Second * 5,
 		SkipOnErr: true,
@@ -41,7 +41,7 @@ func main() {
 	})
 
 	// postgres health check example
-	h.Register(health.Config{
+	h.Register(health.CheckConfig{
 		Name:      "postgres-check",
 		Timeout:   time.Second * 5,
 		SkipOnErr: true,
@@ -51,7 +51,7 @@ func main() {
 	})
 
 	// mysql health check example
-	h.Register(health.Config{
+	h.Register(health.CheckConfig{
 		Name:      "mysql-check",
 		Timeout:   time.Second * 5,
 		SkipOnErr: true,
@@ -64,7 +64,7 @@ func main() {
 	// Use it if your app has access to RabbitMQ management API.
 	// This endpoint declares a test queue, then publishes and consumes a message. Intended for use by monitoring tools. If everything is working correctly, will return HTTP status 200.
 	// As the default virtual host is called "/", this will need to be encoded as "%2f".
-	h.Register(health.Config{
+	h.Register(health.CheckConfig{
 		Name:      "rabbit-aliveness-check",
 		Timeout:   time.Second * 5,
 		SkipOnErr: true,

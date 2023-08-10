@@ -10,7 +10,7 @@ import (
 type Option func(*Health) error
 
 // WithChecks adds checks to newly instantiated health-container
-func WithChecks(checks ...Config) Option {
+func WithChecks(checks ...CheckConfig) Option {
 	return func(h *Health) error {
 		for _, c := range checks {
 			if err := h.Register(c); err != nil {
