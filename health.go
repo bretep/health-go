@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"os/exec"
 	"runtime"
 	"sync"
 	"time"
@@ -38,6 +39,12 @@ type (
 	// CheckFunc is the func which executes the check.
 	CheckFunc func(context.Context) CheckResponse
 
+	CheckNotification struct {
+		Name       string
+		Message    string
+		Attachment []byte
+	}
+
 	// CheckConfig carries the parameters to run the check.
 	CheckConfig struct {
 		// Name is the name of the resource to be checked.
@@ -58,6 +65,14 @@ type (
 		FailuresBeforeWarning int
 		// FailuresBeforeCritical number of passing checks before reporting as critical
 		FailuresBeforeCritical int
+		// SuccessAction configuration
+		SuccessAction *Action
+		// WarningAction configuration
+		WarningAction *Action
+		// FailureAction configuration
+		FailureAction *Action
+		// TimeoutAction configuration
+		TimeoutAction *Action
 
 		// paused is used to determine if a check should run
 		paused     bool
@@ -120,9 +135,12 @@ type (
 
 	// Health is the health-checks container
 	Health struct {
-		mu            sync.Mutex
-		checks        map[string]CheckConfig
-		maxConcurrent int
+		NotificationsSender *Notifications
+
+		mu                   sync.Mutex
+		checks               map[string]CheckConfig
+		maxConcurrent        int
+		notificationsChannel chan CheckNotification
 
 		tp                  trace.TracerProvider
 		instrumentationName string
@@ -132,24 +150,61 @@ type (
 		systemInfoEnabled bool
 	}
 
-	// StatusUpdater keeps track of a checks check
+	// Notifications manages publishing notifications
+	Notifications struct {
+		channel chan CheckNotification
+		mu      sync.Mutex
+	}
+
+	// StatusUpdater keeps track of a checks status
 	StatusUpdater struct {
 		check     *CheckStatus
+		actions   *ActionRunner
 		successes int
 		failures  int
 
 		successesBeforePassing int
 		failuresBeforeWarning  int
 		failuresBeforeCritical int
+
+		notifications *Notifications
+	}
+	// Action contains configuration for running an action
+	Action struct {
+		Command                string
+		UnlockAfterDuration    time.Duration
+		UnlockOnlyAfterHealthy bool
+		SendCommandOutput      bool
+
+		lastRun time.Time
+		canRun  bool
+	}
+
+	// ActionRunner keeps track of a checks actions
+	ActionRunner struct {
+		checkName     string
+		successAction *Action
+		warningAction *Action
+		failureAction *Action
+		timeoutAction *Action
+		notifications *Notifications
+
+		mu     sync.Mutex
+		status Status
 	}
 )
 
 // New instantiates and build new health check container
 func New(opts ...Option) (*Health, error) {
+	notificationsChannel := make(chan CheckNotification)
+	notificationsSender := NewNotificationSender(notificationsChannel)
+
 	h := &Health{
-		checks:        make(map[string]CheckConfig),
-		tp:            trace.NewNoopTracerProvider(),
-		maxConcurrent: runtime.NumCPU(),
+		NotificationsSender:  notificationsSender,
+		checks:               make(map[string]CheckConfig),
+		tp:                   trace.NewNoopTracerProvider(),
+		maxConcurrent:        runtime.NumCPU(),
+		notificationsChannel: notificationsChannel,
 	}
 
 	for _, o := range opts {
@@ -159,6 +214,10 @@ func New(opts ...Option) (*Health, error) {
 	}
 
 	return h, nil
+}
+
+func (h *Health) Subscribe() (c <-chan CheckNotification) {
+	return h.notificationsChannel
 }
 
 // Register registers a check config to be performed.
@@ -198,7 +257,10 @@ func (h *Health) Register(c CheckConfig) error {
 		failuresBeforeCritical = c.FailuresBeforeCritical
 	}
 
-	c.Status = NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical)
+	ar := NewActionRunner(c.Name, c.SuccessAction, c.WarningAction, c.FailureAction, c.TimeoutAction, h.NotificationsSender)
+	c.Status = NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical, ar, h.NotificationsSender)
+
+	// Add health check
 	h.checks[c.Name] = c
 
 	c.Start()
@@ -303,6 +365,169 @@ func (h *Health) Status(ctx context.Context) Check {
 	return newCheck(h.component, status, systemMetrics, failures)
 }
 
+// NewNotificationSender for sending notifications
+func NewNotificationSender(channel chan CheckNotification) *Notifications {
+	return &Notifications{
+		channel: channel,
+	}
+}
+
+// Send notifications
+func (n Notifications) Send(notification CheckNotification) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.channel <- notification
+}
+
+func (a Action) Run() (notification CheckNotification) {
+
+	cmd := exec.Command("/bin/sh", "-c", a.Command)
+	out, err := cmd.Output()
+	if err != nil {
+		notification.Message = err.Error()
+	}
+	if a.SendCommandOutput {
+		notification.Attachment = out
+	}
+	return
+}
+func (a *ActionRunner) Success() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.successAction != nil {
+		if a.successAction.UnlockOnlyAfterHealthy {
+			if a.status != StatusPassing {
+				a.successAction.canRun = true
+				a.status = StatusPassing
+			}
+		} else {
+			if time.Since(a.successAction.lastRun) >= a.successAction.UnlockAfterDuration && a.status != StatusPassing {
+				a.successAction.canRun = true
+				a.status = StatusPassing
+			}
+		}
+		if a.successAction.canRun {
+			if a.successAction.Command != "" {
+				go func() {
+					result := a.successAction.Run()
+					result.Name = a.checkName
+					if result.Message == "" {
+						result.Message = "Finished running."
+					}
+					a.notifications.Send(result)
+				}()
+				a.successAction.canRun = false
+				a.successAction.lastRun = time.Now()
+			}
+		}
+	} else {
+		// Always set this even if not configured
+		a.status = StatusPassing
+	}
+}
+func (a *ActionRunner) Failure() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.failureAction != nil {
+		if a.failureAction.UnlockOnlyAfterHealthy {
+			if a.status != StatusCritical {
+				a.failureAction.canRun = true
+				a.status = StatusCritical
+			}
+		} else {
+			if time.Since(a.failureAction.lastRun) >= a.failureAction.UnlockAfterDuration && a.status != StatusCritical {
+				a.failureAction.canRun = true
+				a.status = StatusCritical
+			}
+		}
+		if a.failureAction.canRun {
+			if a.failureAction.Command != "" {
+				go func() {
+					result := a.failureAction.Run()
+					result.Name = a.checkName
+					if result.Message == "" {
+						result.Message = "Finished running."
+					}
+					a.notifications.Send(result)
+				}()
+				a.failureAction.canRun = false
+				a.failureAction.lastRun = time.Now()
+			}
+		}
+	} else {
+		// Always set this even if not configured
+		a.status = StatusCritical
+	}
+}
+func (a *ActionRunner) Warning() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.warningAction != nil {
+		if a.warningAction.UnlockOnlyAfterHealthy {
+			if a.status != StatusWarning {
+				a.warningAction.canRun = true
+				a.status = StatusWarning
+			}
+		} else {
+			if time.Since(a.warningAction.lastRun) >= a.warningAction.UnlockAfterDuration && a.status != StatusWarning {
+				a.warningAction.canRun = true
+				a.status = StatusWarning
+			}
+		}
+		if a.warningAction.canRun {
+			if a.warningAction.Command != "" {
+				go func() {
+					result := a.warningAction.Run()
+					result.Name = a.checkName
+					if result.Message == "" {
+						result.Message = "Finished running."
+					}
+					a.notifications.Send(result)
+				}()
+				a.warningAction.canRun = false
+				a.warningAction.lastRun = time.Now()
+			}
+		}
+	} else {
+		// Always set this even if not configured
+		a.status = StatusWarning
+	}
+}
+func (a *ActionRunner) Timeout() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.timeoutAction != nil {
+		if a.timeoutAction.UnlockOnlyAfterHealthy {
+			if a.status != StatusTimeout {
+				a.timeoutAction.canRun = true
+				a.status = StatusTimeout
+			}
+		} else {
+			if time.Since(a.timeoutAction.lastRun) >= a.timeoutAction.UnlockAfterDuration && a.status != StatusTimeout {
+				a.timeoutAction.canRun = true
+				a.status = StatusTimeout
+			}
+		}
+		if a.timeoutAction.canRun {
+			if a.timeoutAction.Command != "" {
+				go func() {
+					result := a.timeoutAction.Run()
+					result.Name = a.checkName
+					if result.Message == "" {
+						result.Message = "Finished running."
+					}
+					a.notifications.Send(result)
+				}()
+				a.timeoutAction.canRun = false
+				a.timeoutAction.lastRun = time.Now()
+			}
+		}
+	} else {
+		// Always set this even if not configured
+		a.status = StatusTimeout
+	}
+}
+
 // Start a health check
 func (c *CheckConfig) Start() {
 	c.pausedLock.Lock()
@@ -400,27 +625,56 @@ func (s *CheckStatus) Get() (status Status, err error) {
 	return s.Status, s.Error
 }
 
+// NewActionRunner returns a new ActionRunner
+func NewActionRunner(checkName string, successAction, warningAction, failureAction, timeoutAction *Action, notifications *Notifications) *ActionRunner {
+	return &ActionRunner{
+		checkName:     checkName,
+		successAction: successAction,
+		warningAction: warningAction,
+		failureAction: failureAction,
+		timeoutAction: timeoutAction,
+		notifications: notifications,
+		status:        StatusCritical,
+	}
+}
+
 // NewStatusUpdater returns a new StatusUpdater that is in critical condition
-func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int) *StatusUpdater {
+func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int, actionRunner *ActionRunner, notifications *Notifications) *StatusUpdater {
+	notification := CheckNotification{
+		Name:    actionRunner.checkName,
+		Message: string(StatusCritical),
+	}
+	notifications.Send(notification)
 	return &StatusUpdater{
 		check: &CheckStatus{
 			Status: StatusCritical,
 			Error:  errors.New(string(StatusInitializing)),
 		},
+		actions:                actionRunner,
 		successes:              0,
 		failures:               0,
 		successesBeforePassing: successesBeforePassing,
 		failuresBeforeWarning:  failuresBeforeWarning,
 		failuresBeforeCritical: failuresBeforeCritical,
+		notifications:          notifications,
 	}
 }
 
 func (s *StatusUpdater) update(status Status, err error) {
+	notification := CheckNotification{
+		Name: s.actions.checkName,
+	}
+	oldStatus, _ := s.check.Get()
 	if status == StatusPassing || status == StatusWarning {
 		s.successes++
 		s.failures = 0
 		if s.successes >= s.successesBeforePassing {
 			s.check.Update(status, err)
+			if oldStatus != status {
+				notification.Message = string(status)
+				s.notifications.Send(notification)
+			}
+			s.actions.Success()
 			return
 		}
 	} else {
@@ -430,12 +684,29 @@ func (s *StatusUpdater) update(status Status, err error) {
 		// Update check to Critical if it has reached the threshold
 		if s.failures >= s.failuresBeforeCritical {
 			s.check.Update(status, err)
+			if oldStatus != status {
+				notification.Message = string(status)
+				s.notifications.Send(notification)
+			}
+			s.actions.Failure()
 			return
 		}
 		// Update check to Warning if it has reached the threshold
 		if s.failures >= s.failuresBeforeWarning {
 			s.check.Update(StatusWarning, err)
+			if oldStatus != status {
+				notification.Message = string(status)
+				s.notifications.Send(notification)
+			}
+			s.actions.Warning()
 			return
+		}
+		if status == StatusTimeout {
+			if oldStatus != status {
+				notification.Message = string(status)
+				s.notifications.Send(notification)
+			}
+			s.actions.Timeout()
 		}
 		//	No threshold meet, check remains the same
 	}
