@@ -664,6 +664,10 @@ func (s *StatusUpdater) update(status Status, err error) {
 	notification := CheckNotification{
 		Name: s.actions.checkName,
 	}
+	statusMessage := fmt.Sprintf("Status: %s", status)
+	if err != nil {
+		statusMessage = fmt.Sprintf("%s, Error: %s", statusMessage, err.Error())
+	}
 	oldStatus, _ := s.check.Get()
 	if status == StatusTimeout {
 		s.failures++
@@ -671,7 +675,7 @@ func (s *StatusUpdater) update(status Status, err error) {
 		s.check.Update(status, err)
 
 		if oldStatus != status {
-			notification.Message = string(status)
+			notification.Message = statusMessage
 			s.notifications.Send(notification)
 		}
 		s.actions.Timeout()
@@ -683,7 +687,7 @@ func (s *StatusUpdater) update(status Status, err error) {
 		if s.successes >= s.successesBeforePassing {
 			s.check.Update(status, err)
 			if oldStatus != status {
-				notification.Message = string(status)
+				notification.Message = statusMessage
 				s.notifications.Send(notification)
 			}
 			s.actions.Success()
@@ -697,7 +701,7 @@ func (s *StatusUpdater) update(status Status, err error) {
 		if s.failures >= s.failuresBeforeCritical {
 			s.check.Update(status, err)
 			if oldStatus != status {
-				notification.Message = string(status)
+				notification.Message = statusMessage
 				s.notifications.Send(notification)
 			}
 			s.actions.Failure()
@@ -707,7 +711,7 @@ func (s *StatusUpdater) update(status Status, err error) {
 		if s.failures >= s.failuresBeforeWarning {
 			s.check.Update(StatusWarning, err)
 			if oldStatus != status {
-				notification.Message = string(status)
+				notification.Message = statusMessage
 				s.notifications.Send(notification)
 			}
 			s.actions.Warning()
