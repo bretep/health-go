@@ -412,7 +412,7 @@ func (a *ActionRunner) Success() {
 					result := a.successAction.Run()
 					result.Name = a.checkName
 					if result.Message == "" {
-						result.Message = "Finished running."
+						result.Message = "Finished running success action."
 					}
 					a.notifications.Send(result)
 				}()
@@ -446,7 +446,7 @@ func (a *ActionRunner) Failure() {
 					result := a.failureAction.Run()
 					result.Name = a.checkName
 					if result.Message == "" {
-						result.Message = "Finished running."
+						result.Message = "Finished running failure action."
 					}
 					a.notifications.Send(result)
 				}()
@@ -480,7 +480,7 @@ func (a *ActionRunner) Warning() {
 					result := a.warningAction.Run()
 					result.Name = a.checkName
 					if result.Message == "" {
-						result.Message = "Finished running."
+						result.Message = "Finished running warning action."
 					}
 					a.notifications.Send(result)
 				}()
@@ -514,7 +514,7 @@ func (a *ActionRunner) Timeout() {
 					result := a.timeoutAction.Run()
 					result.Name = a.checkName
 					if result.Message == "" {
-						result.Message = "Finished running."
+						result.Message = "Finished running timeout action."
 					}
 					a.notifications.Send(result)
 				}()
@@ -665,6 +665,18 @@ func (s *StatusUpdater) update(status Status, err error) {
 		Name: s.actions.checkName,
 	}
 	oldStatus, _ := s.check.Get()
+	if status == StatusTimeout {
+		s.failures++
+		s.successes = 0
+		s.check.Update(status, err)
+
+		if oldStatus != status {
+			notification.Message = string(status)
+			s.notifications.Send(notification)
+		}
+		s.actions.Timeout()
+		return
+	}
 	if status == StatusPassing || status == StatusWarning {
 		s.successes++
 		s.failures = 0
@@ -700,13 +712,6 @@ func (s *StatusUpdater) update(status Status, err error) {
 			}
 			s.actions.Warning()
 			return
-		}
-		if status == StatusTimeout {
-			if oldStatus != status {
-				notification.Message = string(status)
-				s.notifications.Send(notification)
-			}
-			s.actions.Timeout()
 		}
 		//	No threshold meet, check remains the same
 	}
