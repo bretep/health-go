@@ -23,6 +23,13 @@ The library exports `Handler` and `HandlerFunc` functions which are fully compat
 Additionally, library exports `Measure` function that returns summary status for all the registered health checks,
 so it can be used in non-HTTP environments.
 
+### Action-Triggered Environment Variable for Enhanced Decision-making:
+In the event of an error triggering an action, the system sets an environment variable, named `HEALTH_GO_MESSAGE`, with
+the corresponding error message. This feature provides a deeper context for the command executed by the action, enabling
+it to access and utilize `HEALTH_GO_MESSAGE`. Consequently, the command can make more informed decisions based on the
+specific nature of the error message. This integration between error handling and command execution paves the way for
+more adaptive and intelligent system responses.
+
 ### Handler
 
 ```go

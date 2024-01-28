@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -95,7 +97,7 @@ type (
 	}
 
 	CheckStatus struct {
-		// Status is the check check.
+		// Status is the check.
 		Status Status
 		// Error informational message about the Status
 		Error error
@@ -109,6 +111,9 @@ type (
 
 		// IsWarning if set to true, it will retrieve StatusPassing providing the error message from the failed resource.
 		IsWarning bool
+
+		// NoNotification disables a notification for this response
+		NoNotification bool
 	}
 
 	// System runtime variables about the go process.
@@ -152,8 +157,11 @@ type (
 
 	// Notifications manages publishing notifications
 	Notifications struct {
-		channel chan CheckNotification
-		mu      sync.Mutex
+		channel          chan CheckNotification
+		disabled         bool
+		disabledDuration time.Duration
+		disabledTime     time.Time
+		mu               sync.RWMutex
 	}
 
 	// StatusUpdater keeps track of a checks status
@@ -365,6 +373,21 @@ func (h *Health) Status(ctx context.Context) Check {
 	return newCheck(h.component, status, systemMetrics, failures)
 }
 
+// NotificationsDisable disables notification
+func (h *Health) NotificationsDisable(suppressTime time.Duration) {
+	h.NotificationsSender.Disable(suppressTime)
+}
+
+// NotificationsEnable enables notifications
+func (h *Health) NotificationsEnable() {
+	h.NotificationsSender.Enable()
+}
+
+// NotificationsEnabled enables notifications
+func (h *Health) NotificationsEnabled() bool {
+	return h.NotificationsSender.Enabled()
+}
+
 // NewNotificationSender for sending notifications
 func NewNotificationSender(channel chan CheckNotification) *Notifications {
 	return &Notifications{
@@ -373,16 +396,68 @@ func NewNotificationSender(channel chan CheckNotification) *Notifications {
 }
 
 // Send notifications
-func (n Notifications) Send(notification CheckNotification) {
+func (n *Notifications) Send(notification CheckNotification) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.channel <- notification
+
+	// Check if notifications are disabled
+	if n.disabled {
+		// If disabled indefinitely (duration is 0), do not send the notification
+		if n.disabledDuration == 0 {
+			return
+		}
+
+		// Check if the disable duration has elapsed
+		if time.Since(n.disabledTime) < n.disabledDuration {
+			// If still within the disabled duration, do not send the notification
+			return
+		}
+
+		// If the duration has elapsed, re-enable notifications
+		n.disabled = false
+		n.disabledDuration = 0
+	}
+
+	select {
+	case n.channel <- notification:
+		// Notification sent successfully
+	default:
+		// Handle the case where the channel is not ready to receive
+		log.Println("Warning: Notification channel is full or not ready")
+	}
 }
 
-func (a Action) Run() (notification CheckNotification) {
+// Disable notifications
+func (n *Notifications) Disable(disableDuration time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.disabled = true
+	n.disabledDuration = disableDuration
+	n.disabledTime = time.Now()
+}
 
-	cmd := exec.Command("/bin/sh", "-c", a.Command)
-	out, err := cmd.Output()
+// Enable notifications
+func (n *Notifications) Enable() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.disabled = false
+	n.disabledDuration = 0
+}
+
+// Enabled check to see if notifications are enabled
+func (n *Notifications) Enabled() bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return !n.disabled
+}
+
+func (a Action) Run(message string) (notification CheckNotification) {
+	ctx, cancel := context.WithTimeout(context.Background(), a.UnlockAfterDuration)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", a.Command)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("HEALTH_GO_MESSAGE=%s", message))
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		notification.Message = err.Error()
 	}
@@ -391,7 +466,7 @@ func (a Action) Run() (notification CheckNotification) {
 	}
 	return
 }
-func (a *ActionRunner) Success() {
+func (a *ActionRunner) Success(message string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.successAction != nil {
@@ -409,7 +484,7 @@ func (a *ActionRunner) Success() {
 		if a.successAction.canRun {
 			if a.successAction.Command != "" {
 				go func() {
-					result := a.successAction.Run()
+					result := a.successAction.Run(message)
 					result.Name = a.checkName
 					if result.Message == "" {
 						result.Message = "Finished running success action."
@@ -425,7 +500,7 @@ func (a *ActionRunner) Success() {
 		a.status = StatusPassing
 	}
 }
-func (a *ActionRunner) Failure() {
+func (a *ActionRunner) Failure(message string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.failureAction != nil {
@@ -443,7 +518,7 @@ func (a *ActionRunner) Failure() {
 		if a.failureAction.canRun {
 			if a.failureAction.Command != "" {
 				go func() {
-					result := a.failureAction.Run()
+					result := a.failureAction.Run(message)
 					result.Name = a.checkName
 					if result.Message == "" {
 						result.Message = "Finished running failure action."
@@ -459,7 +534,7 @@ func (a *ActionRunner) Failure() {
 		a.status = StatusCritical
 	}
 }
-func (a *ActionRunner) Warning() {
+func (a *ActionRunner) Warning(message string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.warningAction != nil {
@@ -477,7 +552,7 @@ func (a *ActionRunner) Warning() {
 		if a.warningAction.canRun {
 			if a.warningAction.Command != "" {
 				go func() {
-					result := a.warningAction.Run()
+					result := a.warningAction.Run(message)
 					result.Name = a.checkName
 					if result.Message == "" {
 						result.Message = "Finished running warning action."
@@ -493,7 +568,7 @@ func (a *ActionRunner) Warning() {
 		a.status = StatusWarning
 	}
 }
-func (a *ActionRunner) Timeout() {
+func (a *ActionRunner) Timeout(message string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.timeoutAction != nil {
@@ -511,7 +586,7 @@ func (a *ActionRunner) Timeout() {
 		if a.timeoutAction.canRun {
 			if a.timeoutAction.Command != "" {
 				go func() {
-					result := a.timeoutAction.Run()
+					result := a.timeoutAction.Run(message)
 					result.Name = a.checkName
 					if result.Message == "" {
 						result.Message = "Finished running timeout action."
@@ -587,7 +662,7 @@ func (c *CheckConfig) check() {
 		case <-timeout.C:
 			mu.Lock()
 			defer mu.Unlock()
-			c.Status.update(StatusTimeout, errors.New(string(StatusTimeout)))
+			c.Status.update(StatusTimeout, errors.New(string(StatusTimeout)), false)
 		case res := <-resCh:
 			if !timeout.Stop() {
 				<-timeout.C
@@ -605,7 +680,7 @@ func (c *CheckConfig) check() {
 					status = StatusCritical
 				}
 			}
-			c.Status.update(status, res.Error)
+			c.Status.update(status, res.Error, res.NoNotification)
 		}
 	}(c)
 }
@@ -660,7 +735,7 @@ func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBef
 	}
 }
 
-func (s *StatusUpdater) update(status Status, err error) {
+func (s *StatusUpdater) update(status Status, err error, disableNotification bool) {
 	notification := CheckNotification{
 		Name: s.actions.checkName,
 	}
@@ -676,9 +751,11 @@ func (s *StatusUpdater) update(status Status, err error) {
 
 		if oldStatus != status {
 			notification.Message = statusMessage
-			s.notifications.Send(notification)
+			if !disableNotification {
+				s.notifications.Send(notification)
+			}
 		}
-		s.actions.Timeout()
+		s.actions.Timeout(statusMessage)
 		return
 	}
 	if status == StatusPassing || status == StatusWarning {
@@ -688,9 +765,11 @@ func (s *StatusUpdater) update(status Status, err error) {
 			s.check.Update(status, err)
 			if oldStatus != status {
 				notification.Message = statusMessage
-				s.notifications.Send(notification)
+				if !disableNotification {
+					s.notifications.Send(notification)
+				}
 			}
-			s.actions.Success()
+			s.actions.Success(statusMessage)
 			return
 		}
 	} else {
@@ -702,9 +781,11 @@ func (s *StatusUpdater) update(status Status, err error) {
 			s.check.Update(status, err)
 			if oldStatus != status {
 				notification.Message = statusMessage
-				s.notifications.Send(notification)
+				if !disableNotification {
+					s.notifications.Send(notification)
+				}
 			}
-			s.actions.Failure()
+			s.actions.Failure(statusMessage)
 			return
 		}
 		// Update check to Warning if it has reached the threshold
@@ -712,9 +793,11 @@ func (s *StatusUpdater) update(status Status, err error) {
 			s.check.Update(StatusWarning, err)
 			if oldStatus != status {
 				notification.Message = statusMessage
-				s.notifications.Send(notification)
+				if !disableNotification {
+					s.notifications.Send(notification)
+				}
 			}
-			s.actions.Warning()
+			s.actions.Warning(statusMessage)
 			return
 		}
 		//	No threshold meet, check remains the same
