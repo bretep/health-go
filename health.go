@@ -204,7 +204,7 @@ type (
 
 // New instantiates and build new health check container
 func New(opts ...Option) (*Health, error) {
-	notificationsChannel := make(chan CheckNotification)
+	notificationsChannel := make(chan CheckNotification, 50)
 	notificationsSender := NewNotificationSender(notificationsChannel)
 
 	h := &Health{
@@ -476,6 +476,8 @@ func (a *ActionRunner) Success(message string) {
 				a.status = StatusPassing
 			}
 		} else {
+			// This is a special case where we want to run this only if status is not StatusPassing
+			// otherwise it will always run in a normal passing state.
 			if time.Since(a.successAction.lastRun) >= a.successAction.UnlockAfterDuration && a.status != StatusPassing {
 				a.successAction.canRun = true
 				a.status = StatusPassing
@@ -510,7 +512,7 @@ func (a *ActionRunner) Failure(message string) {
 				a.status = StatusCritical
 			}
 		} else {
-			if time.Since(a.failureAction.lastRun) >= a.failureAction.UnlockAfterDuration && a.status != StatusCritical {
+			if time.Since(a.failureAction.lastRun) >= a.failureAction.UnlockAfterDuration {
 				a.failureAction.canRun = true
 				a.status = StatusCritical
 			}
@@ -544,7 +546,7 @@ func (a *ActionRunner) Warning(message string) {
 				a.status = StatusWarning
 			}
 		} else {
-			if time.Since(a.warningAction.lastRun) >= a.warningAction.UnlockAfterDuration && a.status != StatusWarning {
+			if time.Since(a.warningAction.lastRun) >= a.warningAction.UnlockAfterDuration {
 				a.warningAction.canRun = true
 				a.status = StatusWarning
 			}
@@ -578,7 +580,7 @@ func (a *ActionRunner) Timeout(message string) {
 				a.status = StatusTimeout
 			}
 		} else {
-			if time.Since(a.timeoutAction.lastRun) >= a.timeoutAction.UnlockAfterDuration && a.status != StatusTimeout {
+			if time.Since(a.timeoutAction.lastRun) >= a.timeoutAction.UnlockAfterDuration {
 				a.timeoutAction.canRun = true
 				a.status = StatusTimeout
 			}
@@ -758,7 +760,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		s.actions.Timeout(statusMessage)
 		return
 	}
-	if status == StatusPassing || status == StatusWarning {
+	if status == StatusPassing {
 		s.successes++
 		s.failures = 0
 		if s.successes >= s.successesBeforePassing {
@@ -770,6 +772,22 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 				}
 			}
 			s.actions.Success(statusMessage)
+			return
+		}
+	}
+	if status == StatusWarning {
+		s.failures++
+		s.successes = 0
+		// Update check to Warning if it has reached the threshold
+		if s.failures >= s.failuresBeforeWarning {
+			s.check.Update(StatusWarning, err)
+			if oldStatus != status {
+				notification.Message = statusMessage
+				if !disableNotification {
+					s.notifications.Send(notification)
+				}
+			}
+			s.actions.Warning(statusMessage)
 			return
 		}
 	} else {
@@ -788,20 +806,8 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 			s.actions.Failure(statusMessage)
 			return
 		}
-		// Update check to Warning if it has reached the threshold
-		if s.failures >= s.failuresBeforeWarning {
-			s.check.Update(StatusWarning, err)
-			if oldStatus != status {
-				notification.Message = statusMessage
-				if !disableNotification {
-					s.notifications.Send(notification)
-				}
-			}
-			s.actions.Warning(statusMessage)
-			return
-		}
-		//	No threshold meet, check remains the same
 	}
+	//	No threshold meet, check remains the same
 }
 
 func newCheck(c Component, s Status, system *System, failures map[string]string) Check {
