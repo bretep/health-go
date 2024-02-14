@@ -760,6 +760,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		s.actions.Timeout(statusMessage)
 		return
 	}
+
 	if status == StatusPassing {
 		s.successes++
 		s.failures = 0
@@ -775,6 +776,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 			return
 		}
 	}
+
 	if status == StatusWarning {
 		s.failures++
 		s.successes = 0
@@ -790,7 +792,9 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 			s.actions.Warning(statusMessage)
 			return
 		}
-	} else {
+	}
+
+	if status == StatusCritical {
 		s.failures++
 		s.successes = 0
 
