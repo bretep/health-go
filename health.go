@@ -45,6 +45,7 @@ type (
 		Name       string
 		Message    string
 		Attachment []byte
+		Tags       []string
 	}
 
 	// CheckConfig carries the parameters to run the check.
@@ -460,10 +461,12 @@ func (a Action) Run(message string) (notification CheckNotification) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		notification.Message = err.Error()
+		notification.Tags = append(notification.Tags, "run-error")
 	}
 	if a.SendCommandOutput {
 		notification.Attachment = out
 	}
+	notification.Tags = append(notification.Tags, "run-success")
 	return
 }
 func (a *ActionRunner) Success(message string) {
@@ -742,6 +745,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		Name: s.actions.checkName,
 	}
 	statusMessage := fmt.Sprintf("Status: %s", status)
+	notification.Tags = append(notification.Tags, fmt.Sprintf("status-%s", status))
 	if err != nil {
 		statusMessage = fmt.Sprintf("%s, Error: %s", statusMessage, err.Error())
 	}
