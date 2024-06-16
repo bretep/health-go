@@ -46,6 +46,7 @@ type (
 		Message    string
 		Attachment []byte
 		Tags       []string
+		Notifiers  []string
 	}
 
 	// CheckConfig carries the parameters to run the check.
@@ -76,6 +77,8 @@ type (
 		FailureAction *Action
 		// TimeoutAction configuration
 		TimeoutAction *Action
+		// Notifiers list of enabled notifiers
+		Notifiers []string
 
 		// paused is used to determine if a check should run
 		paused     bool
@@ -177,6 +180,7 @@ type (
 		failuresBeforeCritical int
 
 		notifications *Notifications
+		notifiers     []string
 	}
 	// Action contains configuration for running an action
 	Action struct {
@@ -184,6 +188,8 @@ type (
 		UnlockAfterDuration    time.Duration
 		UnlockOnlyAfterHealthy bool
 		SendCommandOutput      bool
+		// Notifiers list of enabled notifiers
+		Notifiers []string
 
 		lastRun time.Time
 		canRun  bool
@@ -267,7 +273,7 @@ func (h *Health) Register(c CheckConfig) error {
 	}
 
 	ar := NewActionRunner(c.Name, c.SuccessAction, c.WarningAction, c.FailureAction, c.TimeoutAction, h.NotificationsSender)
-	c.Status = NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical, ar, h.NotificationsSender)
+	c.Status = NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical, ar, h.NotificationsSender, c.Notifiers)
 
 	// Add health check
 	h.checks[c.Name] = c
@@ -456,17 +462,18 @@ func (a Action) Run(message string) (notification CheckNotification) {
 	ctx, cancel := context.WithTimeout(context.Background(), a.UnlockAfterDuration)
 	defer cancel()
 
+	notification.Notifiers = a.Notifiers
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", a.Command)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("HEALTH_GO_MESSAGE=%s", message))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		notification.Message = err.Error()
-		notification.Tags = append(notification.Tags, "run-error")
+		notification.Tags = append(notification.Tags, "run:error")
 	}
 	if a.SendCommandOutput {
 		notification.Attachment = out
 	}
-	notification.Tags = append(notification.Tags, "run-success")
+	notification.Tags = append(notification.Tags, "run:success")
 	return
 }
 func (a *ActionRunner) Success(message string) {
@@ -491,6 +498,7 @@ func (a *ActionRunner) Success(message string) {
 				go func() {
 					result := a.successAction.Run(message)
 					result.Name = a.checkName
+					result.Notifiers = a.successAction.Notifiers
 					if result.Message == "" {
 						result.Message = "Finished running success action."
 					}
@@ -525,6 +533,7 @@ func (a *ActionRunner) Failure(message string) {
 				go func() {
 					result := a.failureAction.Run(message)
 					result.Name = a.checkName
+					result.Notifiers = a.failureAction.Notifiers
 					if result.Message == "" {
 						result.Message = "Finished running failure action."
 					}
@@ -559,6 +568,7 @@ func (a *ActionRunner) Warning(message string) {
 				go func() {
 					result := a.warningAction.Run(message)
 					result.Name = a.checkName
+					result.Notifiers = a.warningAction.Notifiers
 					if result.Message == "" {
 						result.Message = "Finished running warning action."
 					}
@@ -593,6 +603,7 @@ func (a *ActionRunner) Timeout(message string) {
 				go func() {
 					result := a.timeoutAction.Run(message)
 					result.Name = a.checkName
+					result.Notifiers = a.timeoutAction.Notifiers
 					if result.Message == "" {
 						result.Message = "Finished running timeout action."
 					}
@@ -719,10 +730,14 @@ func NewActionRunner(checkName string, successAction, warningAction, failureActi
 }
 
 // NewStatusUpdater returns a new StatusUpdater that is in critical condition
-func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int, actionRunner *ActionRunner, notifications *Notifications) *StatusUpdater {
+func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int, actionRunner *ActionRunner, notifications *Notifications, notifiers []string) *StatusUpdater {
 	notification := CheckNotification{
-		Name:    actionRunner.checkName,
-		Message: string(StatusCritical),
+		Name:      actionRunner.checkName,
+		Message:   string(StatusInitializing),
+		Notifiers: notifiers,
+		Tags: []string{
+			fmt.Sprintf("status:%s", StatusInitializing),
+		},
 	}
 	notifications.Send(notification)
 	return &StatusUpdater{
@@ -737,15 +752,17 @@ func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBef
 		failuresBeforeWarning:  failuresBeforeWarning,
 		failuresBeforeCritical: failuresBeforeCritical,
 		notifications:          notifications,
+		notifiers:              notifiers,
 	}
 }
 
 func (s *StatusUpdater) update(status Status, err error, disableNotification bool) {
 	notification := CheckNotification{
-		Name: s.actions.checkName,
+		Name:      s.actions.checkName,
+		Notifiers: s.notifiers,
 	}
 	statusMessage := fmt.Sprintf("Status: %s", status)
-	notification.Tags = append(notification.Tags, fmt.Sprintf("status-%s", status))
+	notification.Tags = append(notification.Tags, fmt.Sprintf("status:%s", status))
 	if err != nil {
 		statusMessage = fmt.Sprintf("%s, Error: %s", statusMessage, err.Error())
 	}
