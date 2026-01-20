@@ -23,8 +23,8 @@ func TestRegisterWithNoName(t *testing.T) {
 
 	err = h.Register(CheckConfig{
 		Name: "",
-		Check: func(context.Context) error {
-			return nil
+		Check: func(context.Context) CheckResponse {
+			return CheckResponse{}
 		},
 	})
 	require.Error(t, err, "health check registration with empty name should return an error")
@@ -38,8 +38,8 @@ func TestDoubleRegister(t *testing.T) {
 
 	conf := CheckConfig{
 		Name: healthCheckName,
-		Check: func(context.Context) error {
-			return nil
+		Check: func(context.Context) CheckResponse {
+			return CheckResponse{}
 		},
 	}
 
@@ -51,8 +51,8 @@ func TestDoubleRegister(t *testing.T) {
 
 	err = h.Register(CheckConfig{
 		Name: healthCheckName,
-		Check: func(context.Context) error {
-			return errors.New("health checks registered")
+		Check: func(context.Context) CheckResponse {
+			return CheckResponse{Error: errors.New("health checks registered")}
 		},
 	})
 	assert.Error(t, err, "registration with same name, but different details should still return an error, but did not")
@@ -69,13 +69,13 @@ func TestHealthHandler(t *testing.T) {
 	err = h.Register(CheckConfig{
 		Name:      "rabbitmq",
 		SkipOnErr: true,
-		Check:     func(context.Context) error { return errors.New(checkErr) },
+		Check:     func(context.Context) CheckResponse { return CheckResponse{Error: errors.New(checkErr)} },
 	})
 	require.NoError(t, err)
 
 	err = h.Register(CheckConfig{
 		Name:  "mongodb",
-		Check: func(context.Context) error { return nil },
+		Check: func(context.Context) CheckResponse { return CheckResponse{} },
 	})
 	require.NoError(t, err)
 
@@ -83,9 +83,9 @@ func TestHealthHandler(t *testing.T) {
 		Name:      "snail-service",
 		SkipOnErr: true,
 		Timeout:   time.Second * 1,
-		Check: func(context.Context) error {
+		Check: func(context.Context) CheckResponse {
 			time.Sleep(time.Second * 2)
-			return nil
+			return CheckResponse{}
 		},
 	})
 	require.NoError(t, err)
@@ -111,28 +111,28 @@ func TestHealthHandler(t *testing.T) {
 	assert.Equal(t, string(StatusTimeout), f["snail-service"], "body returned wrong check for snail-service")
 }
 
-func TestHealth_Measure(t *testing.T) {
+func TestHealth_Status(t *testing.T) {
 	h, err := New(WithChecks(CheckConfig{
 		Name:      "check1",
 		Timeout:   time.Second,
 		SkipOnErr: false,
-		Check: func(context.Context) error {
+		Check: func(context.Context) CheckResponse {
 			time.Sleep(time.Second * 10)
-			return errors.New("check1")
+			return CheckResponse{Error: errors.New("check1")}
 		},
 	}, CheckConfig{
 		Name:      "check2",
 		Timeout:   time.Second * 2,
 		SkipOnErr: false,
-		Check: func(context.Context) error {
+		Check: func(context.Context) CheckResponse {
 			time.Sleep(time.Second * 10)
-			return errors.New("check2")
+			return CheckResponse{Error: errors.New("check2")}
 		},
 	}), WithMaxConcurrent(2))
 	require.NoError(t, err)
 
 	startedAt := time.Now()
-	result := h.Measure(context.Background())
+	result := h.Status(context.Background())
 	elapsed := time.Since(startedAt)
 
 	// both checks should run concurrently and should fail with timeout,
@@ -147,7 +147,7 @@ func TestHealth_Measure(t *testing.T) {
 
 	h, err = New(WithSystemInfo())
 	require.NoError(t, err)
-	result = h.Measure(context.Background())
+	result = h.Status(context.Background())
 
 	assert.NotNil(t, result.System)
 }

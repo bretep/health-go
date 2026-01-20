@@ -18,8 +18,8 @@ func TestAliveness(t *testing.T) {
 		URL: getURL(t),
 	})
 
-	err := check(context.Background())
-	require.NoError(t, err)
+	resp := check(context.Background())
+	require.NoError(t, resp.Error)
 }
 
 func getURL(t *testing.T) string {

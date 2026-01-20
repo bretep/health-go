@@ -47,6 +47,7 @@ type (
 		Attachment []byte
 		Tags       []string
 		Notifiers  []string
+		EventID    string // Event ID for correlating related alerts during an incident
 	}
 
 	// CheckConfig carries the parameters to run the check.
@@ -145,6 +146,7 @@ type (
 	// Health is the health-checks container
 	Health struct {
 		NotificationsSender *Notifications
+		EventTracker        *EventTracker
 
 		mu                   sync.Mutex
 		checks               map[string]CheckConfig
@@ -181,6 +183,12 @@ type (
 
 		notifications *Notifications
 		notifiers     []string
+		eventTracker  *EventTracker
+
+		// pendingEventID stores the event ID when transitioning to healthy.
+		// This is needed because GetOrCreateEventID deletes the event on first call,
+		// but we may need multiple consecutive successes before sending notification.
+		pendingEventID string
 	}
 	// Action contains configuration for running an action
 	Action struct {
@@ -213,9 +221,11 @@ type (
 func New(opts ...Option) (*Health, error) {
 	notificationsChannel := make(chan CheckNotification, 50)
 	notificationsSender := NewNotificationSender(notificationsChannel)
+	eventTracker := NewEventTracker()
 
 	h := &Health{
 		NotificationsSender:  notificationsSender,
+		EventTracker:         eventTracker,
 		checks:               make(map[string]CheckConfig),
 		tp:                   trace.NewNoopTracerProvider(),
 		maxConcurrent:        runtime.NumCPU(),
@@ -273,7 +283,7 @@ func (h *Health) Register(c CheckConfig) error {
 	}
 
 	ar := NewActionRunner(c.Name, c.SuccessAction, c.WarningAction, c.FailureAction, c.TimeoutAction, h.NotificationsSender)
-	c.Status = NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical, ar, h.NotificationsSender, c.Notifiers)
+	c.Status = NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical, ar, h.NotificationsSender, c.Notifiers, h.EventTracker)
 
 	// Add health check
 	h.checks[c.Name] = c
@@ -476,7 +486,7 @@ func (a Action) Run(message string) (notification CheckNotification) {
 	notification.Tags = append(notification.Tags, "run:success")
 	return
 }
-func (a *ActionRunner) Success(message string) {
+func (a *ActionRunner) Success(message string, eventID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.successAction != nil {
@@ -502,6 +512,11 @@ func (a *ActionRunner) Success(message string) {
 					if result.Message == "" {
 						result.Message = "Finished running success action."
 					}
+					// Include event_id so downstream knows which event just ended
+					if eventID != "" {
+						result.EventID = eventID
+						result.Tags = append(result.Tags, fmt.Sprintf("event_id:%s", eventID))
+					}
 					a.notifications.Send(result)
 				}()
 				a.successAction.canRun = false
@@ -513,7 +528,7 @@ func (a *ActionRunner) Success(message string) {
 		a.status = StatusPassing
 	}
 }
-func (a *ActionRunner) Failure(message string) {
+func (a *ActionRunner) Failure(message string, eventID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.failureAction != nil {
@@ -537,6 +552,11 @@ func (a *ActionRunner) Failure(message string) {
 					if result.Message == "" {
 						result.Message = "Finished running failure action."
 					}
+					// Include event_id for failure action notifications
+					if eventID != "" {
+						result.EventID = eventID
+						result.Tags = append(result.Tags, fmt.Sprintf("event_id:%s", eventID))
+					}
 					a.notifications.Send(result)
 				}()
 				a.failureAction.canRun = false
@@ -548,7 +568,7 @@ func (a *ActionRunner) Failure(message string) {
 		a.status = StatusCritical
 	}
 }
-func (a *ActionRunner) Warning(message string) {
+func (a *ActionRunner) Warning(message string, eventID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.warningAction != nil {
@@ -572,6 +592,11 @@ func (a *ActionRunner) Warning(message string) {
 					if result.Message == "" {
 						result.Message = "Finished running warning action."
 					}
+					// Include event_id for warning action notifications
+					if eventID != "" {
+						result.EventID = eventID
+						result.Tags = append(result.Tags, fmt.Sprintf("event_id:%s", eventID))
+					}
 					a.notifications.Send(result)
 				}()
 				a.warningAction.canRun = false
@@ -583,7 +608,7 @@ func (a *ActionRunner) Warning(message string) {
 		a.status = StatusWarning
 	}
 }
-func (a *ActionRunner) Timeout(message string) {
+func (a *ActionRunner) Timeout(message string, eventID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.timeoutAction != nil {
@@ -606,6 +631,11 @@ func (a *ActionRunner) Timeout(message string) {
 					result.Notifiers = a.timeoutAction.Notifiers
 					if result.Message == "" {
 						result.Message = "Finished running timeout action."
+					}
+					// Include event_id for timeout action notifications
+					if eventID != "" {
+						result.EventID = eventID
+						result.Tags = append(result.Tags, fmt.Sprintf("event_id:%s", eventID))
 					}
 					a.notifications.Send(result)
 				}()
@@ -730,7 +760,7 @@ func NewActionRunner(checkName string, successAction, warningAction, failureActi
 }
 
 // NewStatusUpdater returns a new StatusUpdater that is in critical condition
-func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int, actionRunner *ActionRunner, notifications *Notifications, notifiers []string) *StatusUpdater {
+func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int, actionRunner *ActionRunner, notifications *Notifications, notifiers []string, eventTracker *EventTracker) *StatusUpdater {
 	notification := CheckNotification{
 		Name:      actionRunner.checkName,
 		Message:   string(StatusInitializing),
@@ -753,16 +783,43 @@ func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBef
 		failuresBeforeCritical: failuresBeforeCritical,
 		notifications:          notifications,
 		notifiers:              notifiers,
+		eventTracker:           eventTracker,
 	}
 }
 
 func (s *StatusUpdater) update(status Status, err error, disableNotification bool) {
+	// Get or create event ID based on status
+	// For passing status, we need special handling because GetOrCreateEventID
+	// deletes the event on first call, but we may need multiple successes before
+	// sending the notification. Store in pendingEventID to preserve across calls.
+	eventID := ""
+	if status == StatusPassing {
+		// Use pending event ID if we have one from a previous passing check
+		if s.pendingEventID != "" {
+			eventID = s.pendingEventID
+		} else if s.eventTracker != nil {
+			// First passing check - get and store the event ID
+			eventID = s.eventTracker.GetOrCreateEventID(s.actions.checkName, status)
+			s.pendingEventID = eventID
+		}
+	} else {
+		// Not passing - clear any pending event ID and get fresh one
+		s.pendingEventID = ""
+		if s.eventTracker != nil {
+			eventID = s.eventTracker.GetOrCreateEventID(s.actions.checkName, status)
+		}
+	}
+
 	notification := CheckNotification{
 		Name:      s.actions.checkName,
 		Notifiers: s.notifiers,
+		EventID:   eventID,
 	}
 	statusMessage := fmt.Sprintf("Status: %s", status)
 	notification.Tags = append(notification.Tags, fmt.Sprintf("status:%s", status))
+	if eventID != "" {
+		notification.Tags = append(notification.Tags, fmt.Sprintf("event_id:%s", eventID))
+	}
 	if err != nil {
 		statusMessage = fmt.Sprintf("%s, Error: %s", statusMessage, err.Error())
 	}
@@ -778,7 +835,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 				s.notifications.Send(notification)
 			}
 		}
-		s.actions.Timeout(statusMessage)
+		s.actions.Timeout(statusMessage, eventID)
 		return
 	}
 
@@ -793,7 +850,9 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 					s.notifications.Send(notification)
 				}
 			}
-			s.actions.Success(statusMessage)
+			s.actions.Success(statusMessage, eventID)
+			// Clear pending event ID after notification sent
+			s.pendingEventID = ""
 			return
 		}
 	}
@@ -810,7 +869,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 					s.notifications.Send(notification)
 				}
 			}
-			s.actions.Warning(statusMessage)
+			s.actions.Warning(statusMessage, eventID)
 			return
 		}
 	}
@@ -828,7 +887,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 					s.notifications.Send(notification)
 				}
 			}
-			s.actions.Failure(statusMessage)
+			s.actions.Failure(statusMessage, eventID)
 			return
 		}
 	}
