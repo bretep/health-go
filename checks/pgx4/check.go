@@ -3,7 +3,7 @@ package pgx4
 import (
 	"context"
 	"fmt"
-	"github.com/hellofresh/health-go/v5"
+	"github.com/bretep/health-go/v5"
 
 	"github.com/jackc/pgx/v4"
 )

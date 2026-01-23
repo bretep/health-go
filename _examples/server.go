@@ -6,14 +6,32 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hellofresh/health-go/v5"
-	healthHttp "github.com/hellofresh/health-go/v5/checks/http"
-	healthMySql "github.com/hellofresh/health-go/v5/checks/mysql"
-	healthPg "github.com/hellofresh/health-go/v5/checks/postgres"
+	"github.com/bretep/health-go/v5"
+	healthHttp "github.com/bretep/health-go/v5/checks/http"
+	"github.com/bretep/health-go/v5/checks/maintenance"
+	healthMySql "github.com/bretep/health-go/v5/checks/mysql"
+	healthPg "github.com/bretep/health-go/v5/checks/postgres"
 )
 
 func main() {
 	h, _ := health.New(health.WithSystemInfo())
+
+	// maintenance mode check - MUST be named "maintenance" for event correlation
+	// Create the maintenance file to enter maintenance mode, remove to exit.
+	// Use a persistent path (not /tmp) so maintenance survives reboots.
+	// File contents become the error message. Supports notification suppression:
+	//   echo "Upgrading database" > /var/lib/myapp/maintenance
+	//   echo "HEALTH_GO_DISABLE_NOTIFICATIONS_3600" >> /var/lib/myapp/maintenance
+	h.Register(health.CheckConfig{
+		Name:                   "maintenance",
+		Interval:               time.Second, // file check is cheap, respond quickly
+		SuccessesBeforePassing: 1,           // exit maintenance immediately when file removed
+		Check: maintenance.New(maintenance.Config{
+			File:   "/var/lib/myapp/maintenance",
+			Health: h, // enables notification control via file content
+		}),
+	})
+
 	// custom health check example (fail)
 	h.Register(health.CheckConfig{
 		Name:      "some-custom-check-fail",

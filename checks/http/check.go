@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/hellofresh/health-go/v5"
+	"github.com/bretep/health-go/v5"
 	"net/http"
 	"time"
 )

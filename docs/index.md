@@ -31,8 +31,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hellofresh/health-go/v5"
-	healthMysql "github.com/hellofresh/health-go/v5/checks/mysql"
+	"github.com/bretep/health-go/v5"
+	healthMysql "github.com/bretep/health-go/v5/checks/mysql"
 )
 
 func main() {
@@ -78,8 +78,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi"
-	"github.com/hellofresh/health-go/v5"
-	healthMysql "github.com/hellofresh/health-go/v5/checks/mysql"
+	"github.com/bretep/health-go/v5"
+	healthMysql "github.com/bretep/health-go/v5/checks/mysql"
 )
 
 func main() {
@@ -116,7 +116,7 @@ func main() {
 }
 ```
 
-For more examples please check [here](https://github.com/hellofresh/health-go/blob/master/_examples/server.go)
+For more examples please check [here](https://github.com/bretep/health-go/blob/master/_examples/server.go)
 
 ## API Documentation
 

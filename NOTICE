@@ -1,0 +1,20 @@
+health-go
+Copyright 2024 Bret Palsson
+
+This project is a derivative work based on:
+  github.com/hellofresh/health-go
+  Copyright 2020 HelloFresh SE
+  Licensed under the Apache License, Version 2.0
+  https://github.com/hellofresh/health-go
+
+The original work has been substantially modified with the following additions:
+- Background health check execution (prevents DoS to backend services)
+- Notification system with configurable notifiers
+- Action runners for automated responses to health state changes
+- Event tracking for incident correlation
+- Maintenance mode support
+- Status thresholds (SuccessesBeforePassing, FailuresBeforeWarning, FailuresBeforeCritical)
+- Check pause/resume functionality
+
+The original Apache 2.0 license terms apply to the original code.
+This derivative work as a whole is licensed under the MIT License.

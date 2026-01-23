@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/hellofresh/health-go/v5"
+	"github.com/bretep/health-go/v5"
 
 	_ "github.com/go-sql-driver/mysql" // import mysql driver
 )

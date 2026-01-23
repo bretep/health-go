@@ -1,4 +1,4 @@
-module github.com/hellofresh/health-go/v5
+module github.com/bretep/health-go/v5
 
 go 1.18
 
@@ -7,6 +7,7 @@ require (
 	github.com/go-redis/redis/v9 v9.0.0-rc.2
 	github.com/go-sql-driver/mysql v1.7.1
 	github.com/gocql/gocql v1.5.2
+	github.com/google/uuid v1.3.0
 	github.com/influxdata/influxdb-client-go/v2 v2.12.3
 	github.com/jackc/pgx/v4 v4.18.1
 	github.com/jackc/pgx/v5 v5.4.3
@@ -38,7 +39,6 @@ require (
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/google/uuid v1.3.0 // indirect
 	github.com/hailocab/go-hostpool v0.0.0-20160125115350-e80d13ce29ed // indirect
 	github.com/influxdata/line-protocol v0.0.0-20210922203350-b1ad95c89adf // indirect
 	github.com/jackc/chunkreader/v2 v2.0.1 // indirect

@@ -3,7 +3,7 @@ package nats
 import (
 	"context"
 	"fmt"
-	"github.com/hellofresh/health-go/v5"
+	"github.com/bretep/health-go/v5"
 
 	"github.com/nats-io/nats.go"
 )

@@ -18,8 +18,9 @@ const maintenanceCheckName = "maintenance"
 // - When maintenance ends, checks that are still unhealthy keep the maintenance event_id
 // - Only when each individual check becomes healthy does it clear its event_id
 type EventTracker struct {
-	mu       sync.RWMutex
-	eventIDs map[string]string // checkName -> eventID
+	mu        sync.RWMutex
+	eventIDs  map[string]string // checkName -> eventID
+	sequences map[string]int    // eventID -> current sequence number
 
 	// Maintenance tracking
 	maintenanceEventID string          // Current maintenance event_id (empty if not in maintenance)
@@ -31,6 +32,7 @@ type EventTracker struct {
 func NewEventTracker() *EventTracker {
 	return &EventTracker{
 		eventIDs:          make(map[string]string),
+		sequences:         make(map[string]int),
 		maintenanceChecks: make(map[string]bool),
 	}
 }
@@ -93,6 +95,11 @@ func (t *EventTracker) handleRegularCheck(checkName string, isHealthy bool) stri
 		eventID := t.eventIDs[checkName]
 		delete(t.eventIDs, checkName)
 		delete(t.maintenanceChecks, checkName)
+
+		// NOTE: We don't clear sequences here because GetNextSequence still needs
+		// to be called for the passing notification. Sequences are cleared lazily
+		// when a new event with the same ID is created (which won't happen since
+		// event IDs are unique UUIDs).
 
 		// If this check was using the maintenance event_id and all maintenance
 		// checks are now healthy, we can clear the maintenance event_id
@@ -180,6 +187,27 @@ func (t *EventTracker) ActiveEvents() map[string]string {
 		result[k] = v
 	}
 	return result
+}
+
+// GetNextSequence returns the next sequence number for an event and increments counter.
+// Returns 0 if eventID is empty.
+func (t *EventTracker) GetNextSequence(eventID string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if eventID == "" {
+		return 0
+	}
+
+	t.sequences[eventID]++
+	return t.sequences[eventID]
+}
+
+// ClearSequence removes sequence tracking for an event (call when event ends)
+func (t *EventTracker) ClearSequence(eventID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.sequences, eventID)
 }
 
 // generateShortUUID generates an 8-character UUID for readability
