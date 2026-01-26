@@ -14,7 +14,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/nats-io/nats.go v1.28.0
 	github.com/rabbitmq/amqp091-go v1.8.1
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.11.1
 	github.com/vitorsalgado/mocha/v2 v2.0.2
 	go.mongodb.org/mongo-driver v1.12.1
 	go.opentelemetry.io/otel v1.16.0
@@ -66,7 +66,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
-	github.com/stretchr/objx v0.5.0 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
