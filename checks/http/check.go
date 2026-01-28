@@ -1,12 +1,14 @@
 package http
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bretep/health-go/v5"
 	"net/http"
 	"time"
+
+	"github.com/bretep/health-go/v6"
 )
 
 const defaultRequestTimeout = 5 * time.Second
@@ -25,9 +27,7 @@ type Config struct {
 // - getting response status from defined URL
 // - verifying that status code is less than 500
 func New(config Config) func(ctx context.Context) health.CheckResponse {
-	if config.RequestTimeout == 0 {
-		config.RequestTimeout = defaultRequestTimeout
-	}
+	config.RequestTimeout = cmp.Or(config.RequestTimeout, defaultRequestTimeout)
 
 	return func(ctx context.Context) (checkResponse health.CheckResponse) {
 		req, err := http.NewRequest(http.MethodGet, config.URL, nil)
@@ -48,7 +48,7 @@ func New(config Config) func(ctx context.Context) health.CheckResponse {
 			checkResponse.Error = fmt.Errorf("making the request for the health check failed: %w", err)
 			return
 		}
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 
 		if res.StatusCode >= http.StatusInternalServerError {
 			checkResponse.Error = errors.New("remote service is not available at the moment")

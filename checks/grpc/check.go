@@ -1,13 +1,15 @@
 package grpc
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"github.com/bretep/health-go/v5"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/bretep/health-go/v6"
 )
 
 const defaultCheckTimeout = 5 * time.Second
@@ -27,18 +29,16 @@ type Config struct {
 
 // New creates new gRPC health check
 func New(config Config) func(ctx context.Context) health.CheckResponse {
-	if config.CheckTimeout == 0 {
-		config.CheckTimeout = defaultCheckTimeout
-	}
+	config.CheckTimeout = cmp.Or(config.CheckTimeout, defaultCheckTimeout)
 
 	return func(ctx context.Context) (checkResponse health.CheckResponse) {
 		// Set up a connection to the gRPC server
-		conn, err := grpc.Dial(config.Target, config.DialOptions...)
+		conn, err := grpc.NewClient(config.Target, config.DialOptions...)
 		if err != nil {
 			checkResponse.Error = fmt.Errorf("gRPC health check failed on connect: %w", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		healthClient := grpc_health_v1.NewHealthClient(conn)
 

@@ -1,9 +1,59 @@
 # health-go
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/bretep/health-go)](https://goreportcard.com/report/github.com/bretep/health-go)
-[![Go Doc](https://godoc.org/github.com/bretep/health-go?status.svg)](https://godoc.org/github.com/bretep/health-go)
+[![CI](https://github.com/bretep/health-go/actions/workflows/testing.yml/badge.svg)](https://github.com/bretep/health-go/actions/workflows/testing.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bretep/health-go/v6)](https://goreportcard.com/report/github.com/bretep/health-go/v6)
+[![Go Reference](https://pkg.go.dev/badge/github.com/bretep/health-go/v6.svg)](https://pkg.go.dev/github.com/bretep/health-go/v6)
+[![codecov](https://codecov.io/gh/bretep/health-go/branch/master/graph/badge.svg)](https://codecov.io/gh/bretep/health-go)
 
-A library for adding health checks to Go services with advanced features for production environments.
+A production-ready library for adding health checks to Go services with advanced features for reliability and observability.
+
+## What's New in v6
+
+v6 is a major modernization release focusing on **stability**, **performance**, and **Go 1.25+ compatibility**.
+
+### Breaking Changes
+
+- **Go 1.25+ required** - Takes advantage of modern Go features
+- **Module path changed** - `github.com/bretep/health-go/v6`
+- **Redis client updated** - Uses `github.com/redis/go-redis/v9` (renamed from `go-redis/redis`)
+
+### Stability Improvements
+
+- **Fixed data races** - All race conditions detected by `-race` have been resolved
+- **Fixed goroutine leaks** - Check goroutines now properly terminate on pause/shutdown
+- **Fixed copy-lock issues** - Mutex-containing structs are now properly handled
+- **Thread-safe status updates** - Added proper synchronization to `StatusUpdater`
+
+### Performance Improvements
+
+- **Buffered channels** - Prevents goroutine blocking during health checks
+- **Optimized event tracking** - Uses `maps.Clone()` for efficient map copying
+- **Reduced allocations** - Uses `clear()` builtin instead of map reallocation
+- **Modern random number generation** - Uses `math/rand/v2` for better performance
+
+### Code Quality
+
+- **Comprehensive linting** - Passes `golangci-lint` with strict configuration
+- **Race-tested** - All tests pass with `-race` flag
+- **77% test coverage** - Extensive integration tests with real services
+- **Modern Go idioms** - Uses `cmp.Or()`, `slices` package, `for range N` syntax
+
+### Dependency Updates
+
+| Dependency | Version |
+|------------|---------|
+| OpenTelemetry | v1.39.0 |
+| gRPC | v1.78.0 |
+| Redis client | v9.17.3 |
+| MongoDB driver | v1.17.7 |
+| MySQL driver | v1.9.3 |
+| Cassandra (gocql) | v1.7.0 |
+| RabbitMQ (amqp091-go) | v1.10.0 |
+| pgx/v5 | v5.8.0 |
+| NATS | v1.48.0 |
+| InfluxDB client | v2.14.0 |
+| SQLite (modernc.org) | v1.44.3 |
+| testify | v1.11.1 |
 
 ## Features
 
@@ -14,23 +64,28 @@ A library for adding health checks to Go services with advanced features for pro
 - **Action Runners** - Execute shell commands automatically on status changes
 - **Event Tracking** - Correlate related alerts during incidents with event IDs and sequences
 - **Maintenance Mode** - Group failures during maintenance windows under a single event
+- **State Persistence** - Retain health check state across process restarts (SQLite or custom)
 - **Pause/Resume** - Dynamically pause and resume individual health checks
 - **OpenTelemetry Support** - Built-in tracing support
 
 ### Built-in Checkers
 
-- Cassandra
-- gRPC
-- HTTP
-- InfluxDB
-- Maintenance (file-based maintenance mode)
-- Memcached
-- MongoDB
-- MySQL
-- NATS
-- PostgreSQL (lib/pq, pgx/v4, pgx/v5)
-- RabbitMQ
-- Redis
+| Checker | Description |
+|---------|-------------|
+| Cassandra | Apache Cassandra connectivity |
+| gRPC | gRPC health checking protocol |
+| HTTP | HTTP endpoint availability |
+| InfluxDB | InfluxDB v1.x connectivity |
+| Maintenance | File-based maintenance mode |
+| Memcached | Memcached connectivity |
+| MongoDB | MongoDB connectivity and ping |
+| MySQL | MySQL/MariaDB connectivity |
+| NATS | NATS messaging connectivity |
+| PostgreSQL | PostgreSQL via lib/pq |
+| pgx/v4 | PostgreSQL via pgx v4 |
+| pgx/v5 | PostgreSQL via pgx v5 |
+| RabbitMQ | RabbitMQ connectivity and publish/consume |
+| Redis | Redis connectivity and ping |
 
 ## Why Use This Library?
 
@@ -86,13 +141,15 @@ You might want to run a script when a check fails—but not every time it fails.
 | Concurrent check limits | Semaphores, worker pools | `WithMaxConcurrent(n)` |
 | Observability | Manual instrumentation | OpenTelemetry built-in |
 
-The library is ~900 lines of tested, production-hardened code. Writing it yourself means debugging race conditions, edge cases in state transitions, and notification delivery—time better spent on your actual product.
+The library is ~1000 lines of tested, production-hardened code. Writing it yourself means debugging race conditions, edge cases in state transitions, and notification delivery—time better spent on your actual product.
 
 ## Installation
 
 ```bash
-go get github.com/bretep/health-go/v5
+go get github.com/bretep/health-go/v6
 ```
+
+**Requirements:** Go 1.25 or later
 
 ## Quick Start
 
@@ -100,22 +157,26 @@ go get github.com/bretep/health-go/v5
 package main
 
 import (
+	"log"
 	"net/http"
 	"time"
 
-	"github.com/bretep/health-go/v5"
-	"github.com/bretep/health-go/v5/checks/maintenance"
-	healthMysql "github.com/bretep/health-go/v5/checks/mysql"
+	"github.com/bretep/health-go/v6"
+	"github.com/bretep/health-go/v6/checks/maintenance"
+	healthMysql "github.com/bretep/health-go/v6/checks/mysql"
 )
 
 func main() {
-	h, _ := health.New(
+	h, err := health.New(
 		health.WithComponent(health.Component{
 			Name:    "myservice",
 			Version: "v1.0",
 		}),
 		health.WithSystemInfo(),
 	)
+	if err != nil {
+		log.Fatalf("Failed to create health checker: %v", err)
+	}
 
 	// Maintenance mode - create file to enter, remove to exit
 	// Use a persistent path (not /tmp) so maintenance survives reboots
@@ -139,7 +200,7 @@ func main() {
 	})
 
 	http.Handle("/health", h.Handler())
-	http.ListenAndServe(":8080", nil)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 ```
 
@@ -337,7 +398,7 @@ When a check named `maintenance` becomes unhealthy:
 Use the built-in file-based maintenance checker:
 
 ```go
-import "github.com/bretep/health-go/v5/checks/maintenance"
+import "github.com/bretep/health-go/v6/checks/maintenance"
 
 h, _ := health.New()
 
@@ -372,6 +433,103 @@ rm /var/lib/myservice/maintenance
 ```
 
 When the file is removed, the check passes and notifications are automatically re-enabled.
+
+## State Persistence
+
+By default, health check state is lost when your process restarts. This means:
+- Event IDs reset, breaking alert correlation
+- Success/failure counters reset, causing re-initialization delays
+- Action cooldowns reset, potentially triggering duplicate alerts
+
+State persistence solves this by saving state to durable storage.
+
+### Using the SQLite Persister
+
+The built-in SQLite persister provides zero-configuration persistence:
+
+```go
+import (
+	"github.com/bretep/health-go/v6"
+	"github.com/bretep/health-go/v6/persister/sqlite"
+)
+
+// Create the persister
+persister, err := sqlite.New(sqlite.Config{
+	Path: "/var/lib/myapp/health-state.db",
+	// Optional: customize debounce interval (default: 1s)
+	// DebounceInterval: 500 * time.Millisecond,
+})
+if err != nil {
+	log.Fatal(err)
+}
+defer persister.Close()
+
+// Create health checker with persistence
+h, err := health.New(
+	health.WithStatePersister(persister),
+)
+```
+
+**What gets persisted:**
+
+| Component | State |
+|-----------|-------|
+| EventTracker | Event IDs, sequences, maintenance state |
+| StatusUpdater | Success/failure counts, pending event IDs |
+| CheckStatus | Current status and error message |
+| ActionRunner | Status, per-action last run times and cooldowns |
+
+**Design features:**
+
+- **Async saves with debouncing** - State changes are batched (default 1s) to avoid disk I/O on every check
+- **Soft failures** - Persistence errors are logged but don't fail health checks
+- **WAL mode** - SQLite uses write-ahead logging for better concurrent access
+- **Automatic restore** - State is loaded automatically when `health.New()` is called
+
+### Saving State on Shutdown
+
+For graceful shutdown, explicitly save state to ensure the latest changes are persisted:
+
+```go
+// Set up signal handling
+sigCh := make(chan os.Signal, 1)
+signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+go func() {
+	<-sigCh
+	log.Println("Shutting down, saving state...")
+	h.SaveState(context.Background())
+	os.Exit(0)
+}()
+```
+
+### Implementing a Custom Persister
+
+For other storage backends (Redis, PostgreSQL, S3, etc.), implement the `StatePersister` interface:
+
+```go
+type StatePersister interface {
+	SaveEventTrackerState(ctx context.Context, state *EventTrackerState) error
+	LoadEventTrackerState(ctx context.Context) (*EventTrackerState, error)
+	SaveCheckState(ctx context.Context, checkName string, state *CheckState) error
+	LoadCheckState(ctx context.Context, checkName string) (*CheckState, error)
+	LoadAllCheckStates(ctx context.Context) (map[string]*CheckState, error)
+	DeleteCheckState(ctx context.Context, checkName string) error
+	Close() error
+}
+```
+
+See [_examples/custom_persister.go](https://github.com/bretep/health-go/blob/master/_examples/custom_persister.go) for a complete file-based implementation example.
+
+### When to Use Persistence
+
+| Scenario | Recommendation |
+|----------|----------------|
+| Short-lived processes (serverless, batch jobs) | Skip persistence |
+| Long-running services with infrequent restarts | Optional |
+| Services with action cooldowns you want preserved | Recommended |
+| Services where alert correlation across restarts matters | Recommended |
+| High-availability setups with rolling deploys | Recommended |
 
 ## Pause/Resume Checks
 
@@ -456,7 +614,7 @@ r.HandleFunc("/health", h.HandlerFunc)
   "status": "passing",
   "timestamp": "2024-01-15T10:30:00.000Z",
   "system": {
-    "version": "go1.21.0",
+    "version": "go1.25.0",
     "goroutines_count": 12,
     "total_alloc_bytes": 1234567,
     "heap_objects_count": 5678,
@@ -502,6 +660,9 @@ h, err := health.New(
 	// Add OpenTelemetry tracing
 	health.WithTracerProvider(tp, "health-checks"),
 
+	// Enable state persistence (see State Persistence section)
+	health.WithStatePersister(persister),
+
 	// Register checks at creation
 	health.WithChecks(
 		health.CheckConfig{Name: "db", Check: dbCheck},
@@ -514,12 +675,12 @@ h, err := health.New(
 
 ```go
 import (
-	"github.com/bretep/health-go/v5"
-	"github.com/bretep/health-go/v5/checks/http"
-	"github.com/bretep/health-go/v5/checks/maintenance"
-	"github.com/bretep/health-go/v5/checks/mysql"
-	"github.com/bretep/health-go/v5/checks/postgres"
-	"github.com/bretep/health-go/v5/checks/redis"
+	"github.com/bretep/health-go/v6"
+	"github.com/bretep/health-go/v6/checks/http"
+	"github.com/bretep/health-go/v6/checks/maintenance"
+	"github.com/bretep/health-go/v6/checks/mysql"
+	"github.com/bretep/health-go/v6/checks/postgres"
+	"github.com/bretep/health-go/v6/checks/redis"
 )
 
 // HTTP endpoint check
@@ -557,9 +718,56 @@ h.Register(health.CheckConfig{
 })
 ```
 
+## Testing
+
+The library includes comprehensive tests with real service integrations:
+
+```bash
+# Run unit tests
+go test ./...
+
+# Run with race detector
+go test -race ./...
+
+# Run with coverage
+go test -coverprofile=coverage.out ./...
+
+# Run integration tests (requires Docker)
+docker compose up -d
+go test -race ./...
+docker compose down
+```
+
 ## Examples
 
-See the [_examples](https://github.com/bretep/health-go/blob/master/_examples/server.go) directory for complete examples.
+See the [_examples](https://github.com/bretep/health-go/blob/master/_examples/) directory for complete examples:
+
+| Example | Description |
+|---------|-------------|
+| [server.go](https://github.com/bretep/health-go/blob/master/_examples/server.go) | Basic usage with multiple check types |
+| [server_with_persistence.go](https://github.com/bretep/health-go/blob/master/_examples/server_with_persistence.go) | Using SQLite persister for state persistence |
+| [custom_persister.go](https://github.com/bretep/health-go/blob/master/_examples/custom_persister.go) | Implementing a custom `StatePersister` |
+
+## Migration from v5
+
+1. Update import paths:
+   ```go
+   // Old
+   import "github.com/bretep/health-go/v5"
+
+   // New
+   import "github.com/bretep/health-go/v6"
+   ```
+
+2. Update Redis import if using the Redis checker:
+   ```go
+   // The redis client package was renamed upstream
+   // No code changes needed, just `go mod tidy`
+   ```
+
+3. Ensure Go 1.25+ is installed
+
+4. Run `go mod tidy` to update dependencies
 
 ## Contributing
 
@@ -568,6 +776,21 @@ See the [_examples](https://github.com/bretep/health-go/blob/master/_examples/se
 3. Commit your changes (`git commit -am 'Add some feature'`)
 4. Push to the branch (`git push origin my-new-feature`)
 5. Create new Pull Request
+
+### Development
+
+```bash
+# Install dependencies
+go mod download
+
+# Run linter
+golangci-lint run ./...
+
+# Run tests with Docker services
+docker compose up -d
+go test -race -cover ./...
+docker compose down
+```
 
 ## License
 

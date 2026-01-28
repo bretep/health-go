@@ -22,8 +22,12 @@ func (s *CheckStatus) Get() (status Status, err error) {
 	return s.Status, s.Error
 }
 
-// NewStatusUpdater returns a new StatusUpdater that is in critical condition
+// NewStatusUpdater returns a new StatusUpdater that is in critical condition.
+// It sends an "initializing" notification to indicate the check is starting up.
+// Use NewStatusUpdaterSilent when restoring from persisted state to avoid spurious notifications.
 func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int, actionRunner *ActionRunner, notifications *Notifications, notifiers []string, eventTracker *EventTracker) *StatusUpdater {
+	s := newStatusUpdaterInternal(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical, actionRunner, notifications, notifiers, eventTracker)
+
 	// Generate event ID for initializing status (treated as non-passing)
 	var eventID string
 	var sequence int
@@ -48,6 +52,19 @@ func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBef
 		notification.Tags = append(notification.Tags, fmt.Sprintf("sequence:%d", sequence))
 	}
 	notifications.Send(notification)
+
+	return s
+}
+
+// NewStatusUpdaterSilent returns a new StatusUpdater without sending the "initializing" notification.
+// This should be used when restoring state from persistence to avoid sending spurious notifications
+// that would incorrectly resolve or duplicate existing alerts.
+func NewStatusUpdaterSilent(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int, actionRunner *ActionRunner, notifications *Notifications, notifiers []string, eventTracker *EventTracker) *StatusUpdater {
+	return newStatusUpdaterInternal(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical, actionRunner, notifications, notifiers, eventTracker)
+}
+
+// newStatusUpdaterInternal creates the StatusUpdater without sending any notification.
+func newStatusUpdaterInternal(successesBeforePassing, failuresBeforeWarning, failuresBeforeCritical int, actionRunner *ActionRunner, notifications *Notifications, notifiers []string, eventTracker *EventTracker) *StatusUpdater {
 	return &StatusUpdater{
 		check: &CheckStatus{
 			Status: StatusCritical,
@@ -66,6 +83,9 @@ func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBef
 }
 
 func (s *StatusUpdater) update(status Status, err error, disableNotification bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Get or create event ID based on status
 	// For passing status, we need special handling because GetOrCreateEventID
 	// deletes the event on first call, but we may need multiple successes before
@@ -201,10 +221,53 @@ func newSystemMetrics() *System {
 	}
 }
 
-func getAvailability(s Status, skipOnErr bool) Status {
-	if skipOnErr && s != StatusCritical {
-		return StatusWarning
+// GetState returns a snapshot of the StatusUpdater state for persistence.
+func (s *StatusUpdater) GetState() *CheckState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	status, statusErr := s.check.Get()
+	var errMsg string
+	if statusErr != nil {
+		errMsg = statusErr.Error()
 	}
 
-	return StatusCritical
+	state := &CheckState{
+		Successes:      s.successes,
+		Failures:       s.failures,
+		PendingEventID: s.pendingEventID,
+		Status:         status,
+		ErrorMsg:       errMsg,
+		UpdatedAt:      time.Now(),
+	}
+
+	if s.actions != nil {
+		state.ActionRunnerState = s.actions.GetState()
+	}
+
+	return state
+}
+
+// RestoreState restores the StatusUpdater state from a persisted snapshot.
+func (s *StatusUpdater) RestoreState(state *CheckState) {
+	if state == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.successes = state.Successes
+	s.failures = state.Failures
+	s.pendingEventID = state.PendingEventID
+
+	var err error
+	if state.ErrorMsg != "" {
+		err = errors.New(state.ErrorMsg)
+	}
+	s.check.Update(state.Status, err)
+
+	if s.actions != nil && state.ActionRunnerState != nil {
+		s.actions.RestoreState(state.ActionRunnerState)
+	}
 }

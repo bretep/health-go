@@ -1,14 +1,19 @@
 ---
-name: Testing
+name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
   release:
     types:
       - created
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
 
 jobs:
   lint:
@@ -16,48 +21,135 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
         with:
           go-version-file: ./go.mod
-      - uses: golangci/golangci-lint-action@v3
+
+      # Install v2 from source to compile with Go 1.25 (pre-built binaries use older Go)
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
 
   test:
-    name: Test
+    name: Test (Go ${{ matrix.go-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
-        go-version: [ 1.18, 1.19 ]
+        go-version: ["1.25"]
 
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
 
-      - name: Install Task
-        uses: arduino/setup-task@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Start services
+        run: docker compose up -d
 
-      - name: Install docker-compose v2
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Wait for services to be healthy
         run: |
-          gh release -R docker/compose download -p docker-compose-linux-x86_64
-          mv -f docker-compose-linux-x86_64 docker-compose
-          sudo mv /usr/local/bin/docker-compose /usr/local/bin/docker-compose-v2
-          sudo install docker-compose /usr/local/bin/
-          docker-compose --version
+          echo "Waiting for services to be ready..."
+          sleep 10
 
-      - run: task test
+          # Wait for PostgreSQL instances
+          for service in pg-pq pg-pgx4 pg-pgx5; do
+            echo "Waiting for $service..."
+            timeout 60 bash -c "until docker compose exec -T $service pg_isready; do sleep 2; done"
+          done
 
-  tets-summary:
-    name: Test
+          # Wait for MySQL
+          echo "Waiting for mysql..."
+          timeout 60 bash -c "until docker compose exec -T mysql mysqladmin ping -h localhost --silent; do sleep 2; done"
+
+          # Wait for Redis
+          echo "Waiting for redis..."
+          timeout 30 bash -c "until docker compose exec -T redis redis-cli ping | grep -q PONG; do sleep 2; done"
+
+          # Wait for RabbitMQ
+          echo "Waiting for rabbit..."
+          timeout 60 bash -c "until docker compose exec -T rabbit rabbitmqctl status; do sleep 2; done"
+
+          # Wait for MongoDB
+          echo "Waiting for mongo..."
+          timeout 60 bash -c "until docker compose exec -T mongo mongo --eval 'db.runCommand({ ping: 1 })' --quiet; do sleep 2; done"
+
+          # Wait for Cassandra (takes longer)
+          echo "Waiting for cassandra..."
+          timeout 120 bash -c "until docker compose exec -T cassandra cqlsh -e 'describe keyspaces' 2>/dev/null; do sleep 5; done"
+
+          echo "All services are ready!"
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Run tests
+        run: |
+          export HEALTH_GO_RD_DSN="redis://$(docker compose port redis 6379)/0"
+          export HEALTH_GO_PG_PQ_DSN="postgres://test:test@$(docker compose port pg-pq 5432)/test?sslmode=disable"
+          export HEALTH_GO_PG_PGX4_DSN="postgres://test:test@$(docker compose port pg-pgx4 5432)/test?sslmode=disable"
+          export HEALTH_GO_PG_PGX5_DSN="postgres://test:test@$(docker compose port pg-pgx5 5432)/test?sslmode=disable"
+          export HEALTH_GO_MQ_DSN="amqp://guest:guest@$(docker compose port rabbit 5672)/"
+          export HEALTH_GO_MQ_URL="http://guest:guest@$(docker compose port rabbit 15672)/api/aliveness-test/%2F"
+          export HEALTH_GO_MG_DSN="mongodb://$(docker compose port mongo 27017)"
+          export HEALTH_GO_MS_DSN="test:test@tcp($(docker compose port mysql 3306))/test"
+          export HEALTH_GO_MC_DSN="$(docker compose port memcached 11211)"
+          export HEALTH_GO_INFLUXDB_URL="http://$(docker compose port influxdb 8086)"
+          export HEALTH_GO_CASSANDRA_HOST="$(docker compose port cassandra 9042)"
+          export HEALTH_GO_NATS_DSN="nats://$(docker compose port nats 4222)"
+
+          gotestsum --junitfile junit-report.xml --format testdox -- -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Stop services
+        if: always()
+        run: docker compose down
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-go${{ matrix.go-version }}
+          path: junit-report.xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: matrix.go-version == '1.25'
+        with:
+          name: coverage
+          path: coverage.out
+
+      - name: Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Test Results (Go ${{ matrix.go-version }})
+          path: junit-report.xml
+          reporter: java-junit
+          fail-on-error: true
+
+  coverage:
+    name: Coverage Report
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - run: echo "All good!"
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.out
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

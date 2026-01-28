@@ -1,13 +1,15 @@
 package rabbitmq
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"github.com/bretep/health-go/v5"
 	"os"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+
+	"github.com/bretep/health-go/v6"
 )
 
 const (
@@ -109,7 +111,7 @@ func New(config Config) func(ctx context.Context) health.CheckResponse {
 		}()
 
 		p := amqp.Publishing{Body: []byte(time.Now().Format(time.RFC3339Nano))}
-		if err := ch.Publish(config.Exchange, config.RoutingKey, false, false, p); err != nil {
+		if err := ch.PublishWithContext(ctx, config.Exchange, config.RoutingKey, false, false, p); err != nil {
 			checkResponse.Error = fmt.Errorf("RabbitMQ health check failed during publishing: %w", err)
 			return
 		}
@@ -131,26 +133,21 @@ func New(config Config) func(ctx context.Context) health.CheckResponse {
 }
 
 func (c *Config) defaults() {
-	if c.Exchange == "" {
-		c.Exchange = defaultExchange
-	}
+	c.Exchange = cmp.Or(c.Exchange, defaultExchange)
 
 	if c.RoutingKey == "" {
 		host, err := os.Hostname()
-		if nil != err {
+		if err != nil {
 			c.RoutingKey = "-unknown-"
+		} else {
+			c.RoutingKey = host
 		}
-		c.RoutingKey = host
 	}
 
 	if c.Queue == "" {
 		c.Queue = fmt.Sprintf("%s.%s", c.Exchange, c.RoutingKey)
 	}
 
-	if c.ConsumeTimeout == 0 {
-		c.ConsumeTimeout = defaultConsumeTimeout
-	}
-	if c.DialTimeout == 0 {
-		c.DialTimeout = defaultDialTimeout
-	}
+	c.ConsumeTimeout = cmp.Or(c.ConsumeTimeout, defaultConsumeTimeout)
+	c.DialTimeout = cmp.Or(c.DialTimeout, defaultDialTimeout)
 }

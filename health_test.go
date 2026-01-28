@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -372,6 +374,7 @@ func TestStatusUpdater_NoNotificationFlag(t *testing.T) {
 }
 
 func TestEventTracker_BasicLifecycle(t *testing.T) {
+	t.Parallel()
 	tracker := NewEventTracker()
 
 	// No event initially
@@ -398,6 +401,7 @@ func TestEventTracker_BasicLifecycle(t *testing.T) {
 }
 
 func TestEventTracker_MultipleChecks(t *testing.T) {
+	t.Parallel()
 	tracker := NewEventTracker()
 
 	// Different checks get different event IDs
@@ -422,6 +426,7 @@ func TestEventTracker_MultipleChecks(t *testing.T) {
 }
 
 func TestEventTracker_Sequences(t *testing.T) {
+	t.Parallel()
 	tracker := NewEventTracker()
 
 	// Empty event ID returns 0
@@ -440,6 +445,7 @@ func TestEventTracker_Sequences(t *testing.T) {
 }
 
 func TestEventTracker_MaintenanceMode(t *testing.T) {
+	t.Parallel()
 	tracker := NewEventTracker()
 
 	// Not in maintenance initially
@@ -475,6 +481,7 @@ func TestEventTracker_MaintenanceMode(t *testing.T) {
 }
 
 func TestEventTracker_PreExistingFailureDuringMaintenance(t *testing.T) {
+	t.Parallel()
 	tracker := NewEventTracker()
 
 	// Check fails before maintenance
@@ -495,6 +502,7 @@ func TestEventTracker_PreExistingFailureDuringMaintenance(t *testing.T) {
 }
 
 func TestEventTracker_MaintenanceCleanup(t *testing.T) {
+	t.Parallel()
 	tracker := NewEventTracker()
 
 	// Start maintenance
@@ -639,6 +647,7 @@ func TestCheckConfig_Pause(t *testing.T) {
 // --- CheckStatus Tests ---
 
 func TestCheckStatus_UpdateGet(t *testing.T) {
+	t.Parallel()
 	status := &CheckStatus{
 		Status: StatusInitializing,
 		Error:  errors.New("initial error"),
@@ -665,6 +674,7 @@ func TestCheckStatus_UpdateGet(t *testing.T) {
 // --- StatusUpdater Threshold Tests ---
 
 func TestStatusUpdater_SuccessesBeforePassing(t *testing.T) {
+	t.Parallel()
 	channel := make(chan CheckNotification, 10)
 	notifications := NewNotificationSender(channel)
 	eventTracker := NewEventTracker()
@@ -701,6 +711,7 @@ func TestStatusUpdater_SuccessesBeforePassing(t *testing.T) {
 }
 
 func TestStatusUpdater_FailuresBeforeWarning(t *testing.T) {
+	t.Parallel()
 	channel := make(chan CheckNotification, 10)
 	notifications := NewNotificationSender(channel)
 	eventTracker := NewEventTracker()
@@ -726,6 +737,7 @@ func TestStatusUpdater_FailuresBeforeWarning(t *testing.T) {
 }
 
 func TestStatusUpdater_FailuresBeforeCritical(t *testing.T) {
+	t.Parallel()
 	channel := make(chan CheckNotification, 10)
 	notifications := NewNotificationSender(channel)
 	eventTracker := NewEventTracker()
@@ -763,6 +775,7 @@ func TestStatusUpdater_FailuresBeforeCritical(t *testing.T) {
 }
 
 func TestStatusUpdater_CriticalAfterPassing(t *testing.T) {
+	t.Parallel()
 	channel := make(chan CheckNotification, 10)
 	notifications := NewNotificationSender(channel)
 	eventTracker := NewEventTracker()
@@ -801,6 +814,7 @@ func TestStatusUpdater_CriticalAfterPassing(t *testing.T) {
 }
 
 func TestStatusUpdater_FailureResetsSuccessCount(t *testing.T) {
+	t.Parallel()
 	channel := make(chan CheckNotification, 10)
 	notifications := NewNotificationSender(channel)
 	eventTracker := NewEventTracker()
@@ -833,6 +847,7 @@ func TestStatusUpdater_FailureResetsSuccessCount(t *testing.T) {
 // --- CheckResponse.IsWarning Test ---
 
 func TestCheckResponse_IsWarning(t *testing.T) {
+	t.Parallel()
 	channel := make(chan CheckNotification, 10)
 	notifications := NewNotificationSender(channel)
 	eventTracker := NewEventTracker()
@@ -849,7 +864,7 @@ func TestCheckResponse_IsWarning(t *testing.T) {
 		IsWarning: true,
 	}
 
-	var status Status = StatusPassing
+	status := StatusPassing
 	if res.Error != nil {
 		if res.IsWarning {
 			status = StatusWarning
@@ -867,6 +882,7 @@ func TestCheckResponse_IsWarning(t *testing.T) {
 // --- Handler HTTP Status Codes Tests ---
 
 func TestHandler_StatusCodes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		checkStatus    Status
@@ -901,6 +917,7 @@ func TestHandler_StatusCodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			h, err := New()
 			require.NoError(t, err)
 
@@ -926,7 +943,7 @@ func TestHandler_StatusCodes(t *testing.T) {
 			assert.Equal(t, tt.expectedCode, res.Code)
 
 			var body map[string]any
-			json.NewDecoder(res.Body).Decode(&body)
+			_ = json.NewDecoder(res.Body).Decode(&body)
 			assert.Equal(t, tt.expectedStatus, body["check"])
 		})
 	}
@@ -1072,6 +1089,8 @@ func TestAction_Run_Basic(t *testing.T) {
 
 	// Should have run:success tag
 	assert.Contains(t, notification.Tags, "run:success")
+	// Should NOT have error tag on success
+	assert.NotContains(t, notification.Tags, "run:error")
 }
 
 func TestAction_Run_WithEnvVariable(t *testing.T) {
@@ -1122,6 +1141,8 @@ func TestAction_Run_CommandError(t *testing.T) {
 
 	// Should have error tag
 	assert.Contains(t, notification.Tags, "run:error")
+	// Should NOT have success tag on error
+	assert.NotContains(t, notification.Tags, "run:success")
 	// Should have error message
 	assert.NotEmpty(t, notification.Message)
 }
@@ -1260,14 +1281,7 @@ func TestNotification_Tags_StatusIncluded(t *testing.T) {
 	notification := <-channel
 
 	// Should have status tag
-	hasStatusTag := false
-	for _, tag := range notification.Tags {
-		if tag == "status:passing" {
-			hasStatusTag = true
-			break
-		}
-	}
-	assert.True(t, hasStatusTag, "notification should have status tag")
+	assert.True(t, slices.Contains(notification.Tags, "status:passing"), "notification should have status tag")
 }
 
 func TestNotification_Tags_EventIDAndSequence(t *testing.T) {
@@ -1289,17 +1303,13 @@ func TestNotification_Tags_EventIDAndSequence(t *testing.T) {
 
 	notification := <-channel
 
-	// Should have event_id tag
-	hasEventIDTag := false
-	hasSequenceTag := false
-	for _, tag := range notification.Tags {
-		if len(tag) > 9 && tag[:9] == "event_id:" {
-			hasEventIDTag = true
-		}
-		if len(tag) > 9 && tag[:9] == "sequence:" {
-			hasSequenceTag = true
-		}
-	}
+	// Should have event_id and sequence tags
+	hasEventIDTag := slices.ContainsFunc(notification.Tags, func(tag string) bool {
+		return strings.HasPrefix(tag, "event_id:")
+	})
+	hasSequenceTag := slices.ContainsFunc(notification.Tags, func(tag string) bool {
+		return strings.HasPrefix(tag, "sequence:")
+	})
 	assert.True(t, hasEventIDTag, "notification should have event_id tag")
 	assert.True(t, hasSequenceTag, "notification should have sequence tag")
 
@@ -1357,9 +1367,10 @@ func TestHandler_IncludesComponent(t *testing.T) {
 	h.HandlerFunc(res, req)
 
 	var body map[string]any
-	json.NewDecoder(res.Body).Decode(&body)
+	_ = json.NewDecoder(res.Body).Decode(&body)
 
-	component := body["component"].(map[string]any)
+	component, ok := body["component"].(map[string]any)
+	require.True(t, ok, "component should be a map")
 	assert.Equal(t, "my-service", component["name"])
 	assert.Equal(t, "v1.2.3", component["version"])
 }
@@ -1497,28 +1508,6 @@ func TestStatusUpdater_SequenceNotWastedOnThreshold(t *testing.T) {
 	}
 }
 
-// --- getAvailability Tests (unused function) ---
-
-func TestGetAvailability(t *testing.T) {
-	// When skipOnErr is true and status is not Critical, return Warning
-	result := getAvailability(StatusWarning, true)
-	assert.Equal(t, StatusWarning, result)
-
-	result = getAvailability(StatusPassing, true)
-	assert.Equal(t, StatusWarning, result)
-
-	// When skipOnErr is true but status IS Critical, return Critical
-	result = getAvailability(StatusCritical, true)
-	assert.Equal(t, StatusCritical, result)
-
-	// When skipOnErr is false, always return Critical
-	result = getAvailability(StatusWarning, false)
-	assert.Equal(t, StatusCritical, result)
-
-	result = getAvailability(StatusPassing, false)
-	assert.Equal(t, StatusCritical, result)
-}
-
 // --- CheckConfig Start/Pause/Restart Tests ---
 
 func TestCheckConfig_StartAfterPause(t *testing.T) {
@@ -1590,20 +1579,23 @@ func TestCheckConfig_StartAfterPause(t *testing.T) {
 // --- Action Command Timeout Tests ---
 
 func TestAction_Run_CommandTimeout(t *testing.T) {
-	// Command that would run for 10 seconds, but timeout is 100ms
+	// Test that commands are properly terminated when they exceed the timeout.
+	// Using UnlockAfterDuration as timeout (500ms) + WaitDelay (1s) should
+	// terminate a 10-second sleep in under 3 seconds.
 	action := Action{
 		Command:             "sleep 10",
-		UnlockAfterDuration: time.Millisecond * 100,
+		UnlockAfterDuration: time.Millisecond * 500,
 	}
 
 	start := time.Now()
 	notification := action.Run("test")
 	elapsed := time.Since(start)
 
-	// Should have been killed by timeout, not waited 10 seconds
-	assert.Less(t, elapsed, time.Second, "command should have been killed by timeout")
+	// Should complete well before the 10-second sleep duration.
+	// Allow up to 3 seconds for context timeout (500ms) + WaitDelay (1s) + buffer.
+	assert.Less(t, elapsed, time.Second*3, "command should have been killed by timeout")
 
-	// Should have error due to context cancellation
+	// Should have error due to context cancellation or signal
 	assert.Contains(t, notification.Tags, "run:error")
 }
 
@@ -1626,7 +1618,7 @@ func TestSkipOnErr_ReturnsWarningInsteadOfCritical(t *testing.T) {
 	}
 	skipOnErr := true
 
-	var status Status = StatusPassing
+	status := StatusPassing
 	if checkResponse.Error != nil {
 		if checkResponse.IsWarning || skipOnErr {
 			status = StatusWarning
@@ -1662,7 +1654,7 @@ func TestSkipOnErr_FalseReturnsCritical(t *testing.T) {
 	}
 	skipOnErr := false
 
-	var status Status = StatusPassing
+	status := StatusPassing
 	if checkResponse.Error != nil {
 		if checkResponse.IsWarning || skipOnErr {
 			status = StatusWarning
@@ -1734,4 +1726,151 @@ func TestNewCheck_NilSystem(t *testing.T) {
 
 	assert.Nil(t, check.System)
 	assert.Empty(t, check.Failures)
+}
+
+// --- Silent State Restoration Tests ---
+
+func TestNewStatusUpdaterSilent_NoInitializingNotification(t *testing.T) {
+	channel := make(chan CheckNotification, 10)
+	notifications := NewNotificationSender(channel)
+	eventTracker := NewEventTracker()
+	actionRunner := NewActionRunner("test-check", nil, nil, nil, nil, notifications, eventTracker)
+
+	// Create StatusUpdater silently - should NOT send initializing notification
+	_ = NewStatusUpdaterSilent(1, 1, 1, actionRunner, notifications, nil, eventTracker)
+
+	// Verify no notification was sent
+	select {
+	case notification := <-channel:
+		t.Fatalf("expected no notification from NewStatusUpdaterSilent, got: %s", notification.Message)
+	case <-time.After(time.Millisecond * 100):
+		// Expected - no notification
+	}
+}
+
+func TestNewStatusUpdater_SendsInitializingNotification(t *testing.T) {
+	channel := make(chan CheckNotification, 10)
+	notifications := NewNotificationSender(channel)
+	eventTracker := NewEventTracker()
+	actionRunner := NewActionRunner("test-check", nil, nil, nil, nil, notifications, eventTracker)
+
+	// Create StatusUpdater normally - should send initializing notification
+	_ = NewStatusUpdater(1, 1, 1, actionRunner, notifications, nil, eventTracker)
+
+	// Verify notification was sent
+	select {
+	case notification := <-channel:
+		assert.Equal(t, string(StatusInitializing), notification.Message)
+	case <-time.After(time.Millisecond * 100):
+		t.Fatal("expected initializing notification from NewStatusUpdater")
+	}
+}
+
+func TestRegister_WithPersistedState_NoInitializingNotification(t *testing.T) {
+	// Create a mock persister that returns saved state
+	mockPersister := &mockStatePersister{
+		checkStates: map[string]*CheckState{
+			"test-check": {
+				Status:    StatusCritical,
+				ErrorMsg:  "maintenance mode enabled",
+				Successes: 0,
+				Failures:  1,
+			},
+		},
+	}
+
+	h, err := New(WithStatePersister(mockPersister))
+	require.NoError(t, err)
+
+	notifications := h.Subscribe()
+
+	// Register a check - should NOT send initializing notification due to persisted state
+	err = h.Register(CheckConfig{
+		Name:     "test-check",
+		Interval: time.Second,
+		Check:    func(context.Context) CheckResponse { return CheckResponse{} },
+	})
+	require.NoError(t, err)
+
+	// Verify no notification was sent (state was restored silently)
+	select {
+	case notification := <-notifications:
+		t.Fatalf("expected no notification when restoring state, got: %s", notification.Message)
+	case <-time.After(time.Millisecond * 100):
+		// Expected - no notification because state was restored
+	}
+
+	// Verify the state was actually restored
+	h.mu.Lock()
+	check := h.checks["test-check"]
+	h.mu.Unlock()
+
+	status, err := check.Status.check.Get()
+	assert.Equal(t, StatusCritical, status, "status should be restored from persisted state")
+	assert.EqualError(t, err, "maintenance mode enabled", "error should be restored from persisted state")
+}
+
+func TestRegister_WithoutPersistedState_SendsInitializingNotification(t *testing.T) {
+	// Create a mock persister that returns no saved state
+	mockPersister := &mockStatePersister{
+		checkStates: map[string]*CheckState{},
+	}
+
+	h, err := New(WithStatePersister(mockPersister))
+	require.NoError(t, err)
+
+	notifications := h.Subscribe()
+
+	// Register a check - should send initializing notification since no persisted state
+	err = h.Register(CheckConfig{
+		Name:     "test-check",
+		Interval: time.Second,
+		Check:    func(context.Context) CheckResponse { return CheckResponse{} },
+	})
+	require.NoError(t, err)
+
+	// Verify notification was sent
+	select {
+	case notification := <-notifications:
+		assert.Equal(t, string(StatusInitializing), notification.Message)
+	case <-time.After(time.Millisecond * 100):
+		t.Fatal("expected initializing notification when no persisted state")
+	}
+}
+
+// mockStatePersister is a test double for StatePersister
+type mockStatePersister struct {
+	checkStates       map[string]*CheckState
+	eventTrackerState *EventTrackerState
+}
+
+func (m *mockStatePersister) SaveCheckState(ctx context.Context, name string, state *CheckState) error {
+	m.checkStates[name] = state
+	return nil
+}
+
+func (m *mockStatePersister) LoadCheckState(ctx context.Context, name string) (*CheckState, error) {
+	return m.checkStates[name], nil
+}
+
+func (m *mockStatePersister) LoadAllCheckStates(ctx context.Context) (map[string]*CheckState, error) {
+	return m.checkStates, nil
+}
+
+func (m *mockStatePersister) DeleteCheckState(ctx context.Context, name string) error {
+	delete(m.checkStates, name)
+	return nil
+}
+
+func (m *mockStatePersister) SaveEventTrackerState(ctx context.Context, state *EventTrackerState) error {
+	m.eventTrackerState = state
+	return nil
+}
+
+func (m *mockStatePersister) LoadEventTrackerState(ctx context.Context) (*EventTrackerState, error) {
+	return m.eventTrackerState, nil
+}
+
+func (m *mockStatePersister) Close() error {
+	return nil
 }

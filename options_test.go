@@ -9,9 +9,11 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/embedded"
 )
 
 func TestWithChecks(t *testing.T) {
+	t.Parallel()
 	h1, err := New()
 	require.NoError(t, err)
 	assert.Len(t, h1.checks, 0)
@@ -33,6 +35,7 @@ func TestWithChecks(t *testing.T) {
 }
 
 type mockTracerProvider struct {
+	embedded.TracerProvider
 	mock.Mock
 }
 
@@ -42,6 +45,7 @@ func (m *mockTracerProvider) Tracer(instrumentationName string, opts ...trace.Tr
 }
 
 func TestWithTracerProvider(t *testing.T) {
+	t.Parallel()
 	h1, err := New()
 	require.NoError(t, err)
 	assert.Equal(t, "trace.noopTracerProvider", fmt.Sprintf("%T", h1.tp))
@@ -57,6 +61,7 @@ func TestWithTracerProvider(t *testing.T) {
 }
 
 func TestWithComponent(t *testing.T) {
+	t.Parallel()
 	h1, err := New()
 	require.NoError(t, err)
 	assert.Empty(t, h1.component.Name)
@@ -74,6 +79,7 @@ func TestWithComponent(t *testing.T) {
 }
 
 func TestWithMaxConcurrent(t *testing.T) {
+	t.Parallel()
 	numCPU := runtime.NumCPU()
 	t.Logf("Num CPUs: %d", numCPU)
 
@@ -87,6 +93,7 @@ func TestWithMaxConcurrent(t *testing.T) {
 }
 
 func TestWithSystemInfo(t *testing.T) {
+	t.Parallel()
 	h1, err := New()
 	require.NoError(t, err)
 	assert.False(t, h1.systemInfoEnabled)

@@ -1,20 +1,86 @@
 ---
-# See https://golangci-lint.run/usage/configuration/#config-file for more information
+version: "2"
+
 run:
   timeout: 5m
+  modules-download-mode: readonly
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/bretep/health-go/v6
+
 linters:
   disable-all: true
   enable:
-    - gofmt
+    # Default linters
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Additional linters
     - revive
-    - goimports
-  fast: false
-linters-settings:
-  gofmt:
-    simplify: false
+    - misspell
+    - unconvert
+    - bodyclose
+    - errorlint
+
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true
+        - name: increment-decrement
+        - name: var-naming
+          disabled: true  # Allow package names like "http"
+        - name: var-declaration
+        - name: package-comments
+          disabled: true
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    staticcheck:
+      checks:
+        - all
+        - -SA1019  # Ignore deprecation warnings (grpc.Dial, trace.NewNoopTracerProvider)
+        - -QF1008  # Ignore embedded field selector suggestions
+        - -ST1000  # Don't require package comments
+        - -ST1003  # Don't enforce naming conventions
+
 issues:
-  exclude-use-default: false
-  exclude-rules: 
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Exclude test files from most linters
+    - path: _test\.go
+      linters:
+        - errcheck
+        - bodyclose
+
+    # Exclude common defer close patterns (standard Go idiom)
     - linters:
-        - revive
-      text: "package-comments:"
+        - errcheck
+      source: "defer .+\\.Close\\(\\)"

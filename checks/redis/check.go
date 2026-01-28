@@ -3,10 +3,11 @@ package redis
 import (
 	"context"
 	"fmt"
-	"github.com/bretep/health-go/v5"
 	"strings"
 
-	"github.com/go-redis/redis/v9"
+	"github.com/bretep/health-go/v6"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // Config is the Redis checker configuration settings container.
@@ -31,7 +32,7 @@ func New(config Config) func(ctx context.Context) health.CheckResponse {
 
 	return func(ctx context.Context) (checkResponse health.CheckResponse) {
 		rdb := redis.NewClient(redisOptions)
-		defer rdb.Close()
+		defer func() { _ = rdb.Close() }()
 
 		pong, err := rdb.Ping(ctx).Result()
 		if err != nil {

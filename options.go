@@ -58,3 +58,12 @@ func WithSystemInfo() Option {
 		return nil
 	}
 }
+
+// WithStatePersister sets the state persister for persisting health check state
+// across process restarts. If not set, a no-op persister is used (no persistence).
+func WithStatePersister(p StatePersister) Option {
+	return func(h *Health) error {
+		h.persister = p
+		return nil
+	}
+}

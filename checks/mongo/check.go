@@ -1,14 +1,16 @@
 package mongo
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"github.com/bretep/health-go/v5"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
+
+	"github.com/bretep/health-go/v6"
 )
 
 const (
@@ -34,29 +36,15 @@ type Config struct {
 // - connection establishing
 // - doing the ping command
 func New(config Config) func(ctx context.Context) health.CheckResponse {
-	if config.TimeoutConnect == 0 {
-		config.TimeoutConnect = defaultTimeoutConnect
-	}
-
-	if config.TimeoutDisconnect == 0 {
-		config.TimeoutDisconnect = defaultTimeoutDisconnect
-	}
-
-	if config.TimeoutPing == 0 {
-		config.TimeoutPing = defaultTimeoutPing
-	}
+	config.TimeoutConnect = cmp.Or(config.TimeoutConnect, defaultTimeoutConnect)
+	config.TimeoutDisconnect = cmp.Or(config.TimeoutDisconnect, defaultTimeoutDisconnect)
+	config.TimeoutPing = cmp.Or(config.TimeoutPing, defaultTimeoutPing)
 
 	return func(ctx context.Context) (checkResponse health.CheckResponse) {
-		client, err := mongo.NewClient(options.Client().ApplyURI(config.DSN))
-		if err != nil {
-			checkResponse.Error = fmt.Errorf("mongoDB health check failed on client creation: %w", err)
-			return
-		}
-
 		ctxConn, cancelConn := context.WithTimeout(ctx, config.TimeoutConnect)
 		defer cancelConn()
 
-		err = client.Connect(ctxConn)
+		client, err := mongo.Connect(ctxConn, options.Client().ApplyURI(config.DSN))
 		if err != nil {
 			checkResponse.Error = fmt.Errorf("mongoDB health check failed on connect: %w", err)
 			return

@@ -73,9 +73,14 @@ type (
 		// Notifiers list of enabled notifiers
 		Notifiers []string
 
-		// paused is used to determine if a check should run
+		// runtime holds the runtime state (mutex, channels) - initialized by Start()
+		runtime *checkRuntime
+	}
+
+	// checkRuntime holds runtime state for a check, kept separate to allow CheckConfig to be copied
+	checkRuntime struct {
+		mu         sync.Mutex
 		paused     bool
-		pausedLock sync.Mutex
 		pausedChan chan struct{}
 	}
 
@@ -143,7 +148,7 @@ type (
 		EventTracker        *EventTracker
 
 		mu                   sync.Mutex
-		checks               map[string]CheckConfig
+		checks               map[string]*CheckConfig
 		maxConcurrent        int
 		notificationsChannel chan CheckNotification
 
@@ -153,6 +158,7 @@ type (
 		component Component
 
 		systemInfoEnabled bool
+		persister         StatePersister
 	}
 
 	// Notifications manages publishing notifications
@@ -166,6 +172,7 @@ type (
 
 	// StatusUpdater keeps track of a checks status
 	StatusUpdater struct {
+		mu        sync.Mutex
 		check     *CheckStatus
 		actions   *ActionRunner
 		successes int

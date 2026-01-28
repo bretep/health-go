@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const rdDSNEnv = "HEALTH_GO_MD_DSN"
+const mcDSNEnv = "HEALTH_GO_MC_DSN"
 
 func TestNew(t *testing.T) {
 	check := New(Config{
@@ -31,8 +31,8 @@ func TestNewError(t *testing.T) {
 func getDSN(t *testing.T) string {
 	t.Helper()
 
-	redisDSN, ok := os.LookupEnv(rdDSNEnv)
+	mcDSN, ok := os.LookupEnv(mcDSNEnv)
 	require.True(t, ok)
 
-	return redisDSN
+	return mcDSN
 }

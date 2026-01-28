@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bretep/health-go/v5"
+	"github.com/bretep/health-go/v6"
 )
 
 // Config is the maintenance checker configuration.
