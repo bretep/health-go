@@ -1,7 +1,9 @@
 package health
 
 import (
+	"maps"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -80,7 +82,7 @@ func (t *EventTracker) handleMaintenanceCheck(isHealthy bool) string {
 		// First time entering maintenance - generate new event_id
 		t.maintenanceEventID = generateShortUUID()
 		t.maintenanceActive = true
-		t.maintenanceChecks = make(map[string]bool) // Reset tracked checks
+		clear(t.maintenanceChecks) // Reset tracked checks
 	}
 
 	// Store for maintenance check itself
@@ -152,7 +154,7 @@ func (t *EventTracker) maybeCleanupMaintenanceEvent() {
 
 	// No one using it anymore, clear it
 	t.maintenanceEventID = ""
-	t.maintenanceChecks = make(map[string]bool)
+	clear(t.maintenanceChecks)
 }
 
 // GetEventID returns the current event ID for a check without modifying state.
@@ -181,12 +183,7 @@ func (t *EventTracker) GetMaintenanceEventID() string {
 func (t *EventTracker) ActiveEvents() map[string]string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	result := make(map[string]string, len(t.eventIDs))
-	for k, v := range t.eventIDs {
-		result[k] = v
-	}
-	return result
+	return maps.Clone(t.eventIDs)
 }
 
 // GetNextSequence returns the next sequence number for an event and increments counter.
@@ -213,4 +210,42 @@ func (t *EventTracker) ClearSequence(eventID string) {
 // generateShortUUID generates an 8-character UUID for readability
 func generateShortUUID() string {
 	return uuid.New().String()[:8]
+}
+
+// GetState returns a snapshot of the EventTracker state for persistence.
+func (t *EventTracker) GetState() *EventTrackerState {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	return &EventTrackerState{
+		EventIDs:           maps.Clone(t.eventIDs),
+		Sequences:          maps.Clone(t.sequences),
+		MaintenanceEventID: t.maintenanceEventID,
+		MaintenanceActive:  t.maintenanceActive,
+		MaintenanceChecks:  maps.Clone(t.maintenanceChecks),
+		UpdatedAt:          time.Now(),
+	}
+}
+
+// RestoreState restores the EventTracker state from a persisted snapshot.
+// This should be called before any checks are registered.
+func (t *EventTracker) RestoreState(state *EventTrackerState) {
+	if state == nil {
+		return
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if state.EventIDs != nil {
+		t.eventIDs = maps.Clone(state.EventIDs)
+	}
+	if state.Sequences != nil {
+		t.sequences = maps.Clone(state.Sequences)
+	}
+	t.maintenanceEventID = state.MaintenanceEventID
+	t.maintenanceActive = state.MaintenanceActive
+	if state.MaintenanceChecks != nil {
+		t.maintenanceChecks = maps.Clone(state.MaintenanceChecks)
+	}
 }

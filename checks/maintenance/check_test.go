@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bretep/health-go/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bretep/health-go/v6"
 )
 
 func TestNew_FileNotExists_ReturnsHealthy(t *testing.T) {

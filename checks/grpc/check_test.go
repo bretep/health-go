@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -57,7 +58,7 @@ func TestNew(t *testing.T) {
 				Target:  lis.Addr().String(),
 				Service: service,
 				DialOptions: []grpc.DialOption{
-					grpc.WithInsecure(),
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
 				},
 			})
 

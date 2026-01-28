@@ -66,6 +66,9 @@ func NewStatusUpdater(successesBeforePassing, failuresBeforeWarning, failuresBef
 }
 
 func (s *StatusUpdater) update(status Status, err error, disableNotification bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Get or create event ID based on status
 	// For passing status, we need special handling because GetOrCreateEventID
 	// deletes the event on first call, but we may need multiple successes before
@@ -201,10 +204,53 @@ func newSystemMetrics() *System {
 	}
 }
 
-func getAvailability(s Status, skipOnErr bool) Status {
-	if skipOnErr && s != StatusCritical {
-		return StatusWarning
+// GetState returns a snapshot of the StatusUpdater state for persistence.
+func (s *StatusUpdater) GetState() *CheckState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	status, statusErr := s.check.Get()
+	var errMsg string
+	if statusErr != nil {
+		errMsg = statusErr.Error()
 	}
 
-	return StatusCritical
+	state := &CheckState{
+		Successes:      s.successes,
+		Failures:       s.failures,
+		PendingEventID: s.pendingEventID,
+		Status:         status,
+		ErrorMsg:       errMsg,
+		UpdatedAt:      time.Now(),
+	}
+
+	if s.actions != nil {
+		state.ActionRunnerState = s.actions.GetState()
+	}
+
+	return state
+}
+
+// RestoreState restores the StatusUpdater state from a persisted snapshot.
+func (s *StatusUpdater) RestoreState(state *CheckState) {
+	if state == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.successes = state.Successes
+	s.failures = state.Failures
+	s.pendingEventID = state.PendingEventID
+
+	var err error
+	if state.ErrorMsg != "" {
+		err = errors.New(state.ErrorMsg)
+	}
+	s.check.Update(state.Status, err)
+
+	if s.actions != nil && state.ActionRunnerState != nil {
+		s.actions.RestoreState(state.ActionRunnerState)
+	}
 }

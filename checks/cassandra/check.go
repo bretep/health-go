@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bretep/health-go/v5"
+
+	"github.com/bretep/health-go/v6"
 
 	"github.com/gocql/gocql"
 )

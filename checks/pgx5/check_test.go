@@ -48,7 +48,7 @@ func TestEnsureConnectionIsClosed(t *testing.T) {
 		DSN: pgDSN,
 	})
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		err := check(ctx)
 		assert.NoError(t, err.Error)
 		time.Sleep(100 * time.Millisecond)

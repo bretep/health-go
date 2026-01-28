@@ -3,35 +3,45 @@ package health
 import (
 	"context"
 	"errors"
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
 
 // Start a health check
 func (c *CheckConfig) Start() {
-	c.pausedLock.Lock()
-	defer c.pausedLock.Unlock()
-	c.paused = false
-	c.pausedChan = make(chan struct{})
-	go c.runCheck()
+	// Initialize runtime state if needed
+	if c.runtime == nil {
+		c.runtime = &checkRuntime{}
+	}
+
+	c.runtime.mu.Lock()
+	c.runtime.paused = false
+	c.runtime.pausedChan = make(chan struct{})
+	pausedChan := c.runtime.pausedChan // capture for goroutine
+	c.runtime.mu.Unlock()
+
+	go c.runCheckWithChan(pausedChan)
 }
 
 // Pause a health check
 func (c *CheckConfig) Pause() {
-	c.pausedLock.Lock()
-	defer c.pausedLock.Unlock()
-	if !c.paused {
-		c.paused = true
-		close(c.pausedChan)
+	if c.runtime == nil {
+		return
+	}
+
+	c.runtime.mu.Lock()
+	defer c.runtime.mu.Unlock()
+	if !c.runtime.paused {
+		c.runtime.paused = true
+		close(c.runtime.pausedChan)
 	}
 }
 
-// runCheck runs a check until paused
-func (c *CheckConfig) runCheck() {
-	//	Offset starting health check
-	offset := time.Duration(0)
-
+// runCheckWithChan runs a check until the pausedChan is closed
+func (c *CheckConfig) runCheckWithChan(pausedChan <-chan struct{}) {
+	// Offset starting health check with random jitter
+	var offset time.Duration
 	if c.Interval != 0 {
 		offset = time.Duration(rand.Uint64() % uint64(c.Interval))
 	}
@@ -41,24 +51,28 @@ func (c *CheckConfig) runCheck() {
 		case <-nextCheck:
 			c.check()
 			nextCheck = time.After(c.Interval)
-		case <-c.pausedChan:
+		case <-pausedChan:
 			return
 		}
 	}
 }
 
 func (c *CheckConfig) check() {
+	// Skip if no check function defined
+	if c.Check == nil {
+		return
+	}
 
 	var (
 		mu sync.Mutex
 	)
 
 	go func(c *CheckConfig) {
-		resCh := make(chan CheckResponse)
+		resCh := make(chan CheckResponse, 1)
 
 		go func() {
-			resCh <- c.Check(context.Background())
 			defer close(resCh)
+			resCh <- c.Check(context.Background())
 		}()
 
 		timeout := time.NewTimer(c.Timeout)
@@ -76,8 +90,7 @@ func (c *CheckConfig) check() {
 			mu.Lock()
 			defer mu.Unlock()
 
-			var status = StatusPassing
-
+			status := StatusPassing
 			if res.Error != nil {
 				if res.IsWarning || c.SkipOnErr {
 					status = StatusWarning

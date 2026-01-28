@@ -3,7 +3,8 @@ package pgx5
 import (
 	"context"
 	"fmt"
-	"github.com/bretep/health-go/v5"
+
+	"github.com/bretep/health-go/v6"
 
 	"github.com/jackc/pgx/v5"
 )
