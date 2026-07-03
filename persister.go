@@ -56,8 +56,8 @@ type EventTrackerState struct {
 // CheckState represents the persistable state of a health check.
 type CheckState struct {
 	// StatusUpdater state
-	Successes      int    `json:"successes"`
-	Failures       int    `json:"failures"`
+	Successes int `json:"successes"`
+	Failures  int `json:"failures"`
 	// PendingEventID is retained only for backward compatibility with
 	// previously persisted state; it is no longer read or written.
 	//
