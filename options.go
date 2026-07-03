@@ -59,6 +59,17 @@ func WithSystemInfo() Option {
 	}
 }
 
+// WithMaintenanceCheckName overrides which registered check name receives
+// maintenance event handling (default: DefaultMaintenanceCheckName). Use this
+// when the maintenance check is registered under a custom name so that
+// maintenance event grouping keeps working.
+func WithMaintenanceCheckName(name string) Option {
+	return func(h *Health) error {
+		h.EventTracker.SetMaintenanceCheckName(name)
+		return nil
+	}
+}
+
 // WithStatePersister sets the state persister for persisting health check state
 // across process restarts. If not set, a no-op persister is used (no persistence).
 func WithStatePersister(p StatePersister) Option {

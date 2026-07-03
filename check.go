@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
-	"sync"
 	"time"
 )
 
@@ -63,33 +62,24 @@ func (c *CheckConfig) check() {
 		return
 	}
 
-	var (
-		mu sync.Mutex
-	)
-
 	go func(c *CheckConfig) {
+		// The timeout context is passed to the check function so a hung
+		// dependency doesn't leak goroutines: the check is expected to abort
+		// when the context is cancelled.
+		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+		defer cancel()
+
 		resCh := make(chan CheckResponse, 1)
 
 		go func() {
 			defer close(resCh)
-			resCh <- c.Check(context.Background())
+			resCh <- c.Check(ctx)
 		}()
 
-		timeout := time.NewTimer(c.Timeout)
-
 		select {
-		case <-timeout.C:
-			mu.Lock()
-			defer mu.Unlock()
+		case <-ctx.Done():
 			c.Status.update(StatusTimeout, errors.New(string(StatusTimeout)), false)
 		case res := <-resCh:
-			if !timeout.Stop() {
-				<-timeout.C
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-
 			status := StatusPassing
 			if res.Error != nil {
 				if res.IsWarning || c.SkipOnErr {

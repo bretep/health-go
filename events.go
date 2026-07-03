@@ -1,6 +1,7 @@
 package health
 
 import (
+	"encoding/hex"
 	"maps"
 	"sync"
 	"time"
@@ -8,7 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
-const maintenanceCheckName = "maintenance"
+// DefaultMaintenanceCheckName is the check name that receives maintenance
+// event handling unless overridden with WithMaintenanceCheckName.
+const DefaultMaintenanceCheckName = "maintenance"
 
 // EventTracker manages event IDs for health check incidents.
 // An event starts when a check transitions from healthy to unhealthy,
@@ -24,6 +27,9 @@ type EventTracker struct {
 	eventIDs  map[string]string // checkName -> eventID
 	sequences map[string]int    // eventID -> current sequence number
 
+	// maintenanceCheckName is the check name treated as the maintenance check
+	maintenanceCheckName string
+
 	// Maintenance tracking
 	maintenanceEventID string          // Current maintenance event_id (empty if not in maintenance)
 	maintenanceActive  bool            // Whether maintenance is currently active
@@ -33,9 +39,20 @@ type EventTracker struct {
 // NewEventTracker creates a new event tracker
 func NewEventTracker() *EventTracker {
 	return &EventTracker{
-		eventIDs:          make(map[string]string),
-		sequences:         make(map[string]int),
-		maintenanceChecks: make(map[string]bool),
+		eventIDs:             make(map[string]string),
+		sequences:            make(map[string]int),
+		maintenanceChecks:    make(map[string]bool),
+		maintenanceCheckName: DefaultMaintenanceCheckName,
+	}
+}
+
+// SetMaintenanceCheckName overrides which check name gets maintenance event
+// handling. Call before any checks are registered.
+func (t *EventTracker) SetMaintenanceCheckName(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if name != "" {
+		t.maintenanceCheckName = name
 	}
 }
 
@@ -55,7 +72,7 @@ func (t *EventTracker) GetOrCreateEventID(checkName string, status Status) strin
 	isHealthy := status == StatusPassing
 
 	// Handle maintenance check specially
-	if checkName == maintenanceCheckName {
+	if checkName == t.maintenanceCheckName {
 		return t.handleMaintenanceCheck(isHealthy)
 	}
 
@@ -67,13 +84,13 @@ func (t *EventTracker) GetOrCreateEventID(checkName string, status Status) strin
 func (t *EventTracker) handleMaintenanceCheck(isHealthy bool) string {
 	if isHealthy {
 		// Maintenance ended - return the event_id so downstream knows which event ended
-		eventID := t.eventIDs[maintenanceCheckName]
+		eventID := t.eventIDs[t.maintenanceCheckName]
 		t.maintenanceActive = false
 		// Note: We don't clear maintenanceEventID here because checks that
 		// started during maintenance should keep using it until they're healthy
 
 		// Clear the maintenance check's own event
-		delete(t.eventIDs, maintenanceCheckName)
+		delete(t.eventIDs, t.maintenanceCheckName)
 		return eventID
 	}
 
@@ -86,7 +103,7 @@ func (t *EventTracker) handleMaintenanceCheck(isHealthy bool) string {
 	}
 
 	// Store for maintenance check itself
-	t.eventIDs[maintenanceCheckName] = t.maintenanceEventID
+	t.eventIDs[t.maintenanceCheckName] = t.maintenanceEventID
 	return t.maintenanceEventID
 }
 
@@ -99,9 +116,9 @@ func (t *EventTracker) handleRegularCheck(checkName string, isHealthy bool) stri
 		delete(t.maintenanceChecks, checkName)
 
 		// NOTE: We don't clear sequences here because GetNextSequence still needs
-		// to be called for the passing notification. Sequences are cleared lazily
-		// when a new event with the same ID is created (which won't happen since
-		// event IDs are unique UUIDs).
+		// to be called for the passing notification and any success action.
+		// The StatusUpdater calls ClearSequence once the resolution has been
+		// dispatched.
 
 		// If this check was using the maintenance event_id and all maintenance
 		// checks are now healthy, we can clear the maintenance event_id
@@ -200,16 +217,33 @@ func (t *EventTracker) GetNextSequence(eventID string) int {
 	return t.sequences[eventID]
 }
 
-// ClearSequence removes sequence tracking for an event (call when event ends)
+// ClearSequence removes sequence tracking for an event (call when event ends).
+// It is a no-op while any check is still attached to the event ID: maintenance
+// events are shared across checks, and resetting the counter early would issue
+// duplicate (event_id, sequence) pairs to downstream consumers.
 func (t *EventTracker) ClearSequence(eventID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	if eventID == "" {
+		return
+	}
+	for _, id := range t.eventIDs {
+		if id == eventID {
+			return
+		}
+	}
 	delete(t.sequences, eventID)
 }
 
-// generateShortUUID generates an 8-character UUID for readability
+// generateShortUUID generates a 16-hex-character event ID (64 random bits).
+// Kept shorter than a full UUID for readability in chat messages, but long
+// enough that collisions are negligible even across a fleet of instances.
+// Deliberately contains no hyphens: downstream parsers treat a trailing
+// "-<digits>" as a sequence suffix.
 func generateShortUUID() string {
-	return uuid.New().String()[:8]
+	u := uuid.New()
+	return hex.EncodeToString(u[:8])
 }
 
 // GetState returns a snapshot of the EventTracker state for persistence.

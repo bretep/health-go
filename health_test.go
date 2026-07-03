@@ -383,7 +383,7 @@ func TestEventTracker_BasicLifecycle(t *testing.T) {
 	// Create event on failure
 	eventID := tracker.GetOrCreateEventID("check1", StatusCritical)
 	assert.NotEmpty(t, eventID)
-	assert.Len(t, eventID, 8) // short UUID
+	assert.Len(t, eventID, 16) // short hex event ID
 
 	// Same event ID returned while unhealthy
 	sameEventID := tracker.GetOrCreateEventID("check1", StatusCritical)
@@ -439,7 +439,13 @@ func TestEventTracker_Sequences(t *testing.T) {
 	assert.Equal(t, 2, tracker.GetNextSequence(eventID))
 	assert.Equal(t, 3, tracker.GetNextSequence(eventID))
 
-	// ClearSequence resets
+	// ClearSequence is a no-op while the event is still active (a check is
+	// attached to it) so sequence numbers stay unique within the event
+	tracker.ClearSequence(eventID)
+	assert.Equal(t, 4, tracker.GetNextSequence(eventID))
+
+	// Once the event ends, ClearSequence resets
+	tracker.GetOrCreateEventID("check1", StatusPassing)
 	tracker.ClearSequence(eventID)
 	assert.Equal(t, 1, tracker.GetNextSequence(eventID))
 }

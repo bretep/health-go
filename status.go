@@ -86,28 +86,6 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Get or create event ID based on status
-	// For passing status, we need special handling because GetOrCreateEventID
-	// deletes the event on first call, but we may need multiple successes before
-	// sending the notification. Store in pendingEventID to preserve across calls.
-	eventID := ""
-	if status == StatusPassing {
-		// Use pending event ID if we have one from a previous passing check
-		if s.pendingEventID != "" {
-			eventID = s.pendingEventID
-		} else if s.eventTracker != nil {
-			// First passing check - get and store the event ID
-			eventID = s.eventTracker.GetOrCreateEventID(s.actions.checkName, status)
-			s.pendingEventID = eventID
-		}
-	} else {
-		// Not passing - clear any pending event ID and get fresh one
-		s.pendingEventID = ""
-		if s.eventTracker != nil {
-			eventID = s.eventTracker.GetOrCreateEventID(s.actions.checkName, status)
-		}
-	}
-
 	statusMessage := fmt.Sprintf("Status: %s", status)
 	if err != nil {
 		statusMessage = fmt.Sprintf("%s, Error: %s", statusMessage, err.Error())
@@ -115,15 +93,25 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 
 	oldStatus, _ := s.check.Get()
 
+	// The active event ID must stay stable from the moment an alert fires until
+	// the resolution notification is actually sent. To guarantee that, the event
+	// is only created or consumed inside a threshold branch below: sub-threshold
+	// results (including passing results during a not-yet-complete recovery)
+	// never touch the tracker, so a flap during recovery cannot mint a new event
+	// ID and orphan the original alert.
+
 	if status == StatusTimeout {
 		s.failures++
 		s.successes = 0
-		s.check.Update(status, err)
 
-		if oldStatus != status && !disableNotification {
-			s.sendNotification(status, statusMessage, eventID)
+		if s.failures >= s.failuresBeforeCritical {
+			eventID := s.getOrCreateEventID(status)
+			s.check.Update(status, err)
+			if oldStatus != status && !disableNotification {
+				s.sendNotification(status, statusMessage, eventID)
+			}
+			s.actions.Timeout(statusMessage, eventID)
 		}
-		s.actions.Timeout(statusMessage, eventID)
 		return
 	}
 
@@ -131,13 +119,17 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		s.successes++
 		s.failures = 0
 		if s.successes >= s.successesBeforePassing {
+			// Consume the active event (if any) only now that the resolution
+			// notification is really going out.
+			eventID := s.getOrCreateEventID(status)
 			s.check.Update(status, err)
 			if oldStatus != status && !disableNotification {
 				s.sendNotification(status, statusMessage, eventID)
 			}
 			s.actions.Success(statusMessage, eventID)
-			// Clear pending event ID after notification sent
-			s.pendingEventID = ""
+			if eventID != "" && s.eventTracker != nil {
+				s.eventTracker.ClearSequence(eventID)
+			}
 			return
 		}
 	}
@@ -147,6 +139,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		s.successes = 0
 		// Update check to Warning if it has reached the threshold
 		if s.failures >= s.failuresBeforeWarning {
+			eventID := s.getOrCreateEventID(status)
 			s.check.Update(StatusWarning, err)
 			if oldStatus != status && !disableNotification {
 				s.sendNotification(status, statusMessage, eventID)
@@ -162,6 +155,7 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 
 		// Update check to Critical if it has reached the threshold
 		if s.failures >= s.failuresBeforeCritical {
+			eventID := s.getOrCreateEventID(status)
 			s.check.Update(status, err)
 			if oldStatus != status && !disableNotification {
 				s.sendNotification(status, statusMessage, eventID)
@@ -171,6 +165,14 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		}
 	}
 	//	No threshold met, check remains the same
+}
+
+// getOrCreateEventID must be called with s.mu held.
+func (s *StatusUpdater) getOrCreateEventID(status Status) string {
+	if s.eventTracker == nil {
+		return ""
+	}
+	return s.eventTracker.GetOrCreateEventID(s.actions.checkName, status)
 }
 
 // sendNotification builds and sends a notification, only getting sequence number when actually sending
@@ -233,12 +235,11 @@ func (s *StatusUpdater) GetState() *CheckState {
 	}
 
 	state := &CheckState{
-		Successes:      s.successes,
-		Failures:       s.failures,
-		PendingEventID: s.pendingEventID,
-		Status:         status,
-		ErrorMsg:       errMsg,
-		UpdatedAt:      time.Now(),
+		Successes: s.successes,
+		Failures:  s.failures,
+		Status:    status,
+		ErrorMsg:  errMsg,
+		UpdatedAt: time.Now(),
 	}
 
 	if s.actions != nil {
@@ -259,7 +260,6 @@ func (s *StatusUpdater) RestoreState(state *CheckState) {
 
 	s.successes = state.Successes
 	s.failures = state.Failures
-	s.pendingEventID = state.PendingEventID
 
 	var err error
 	if state.ErrorMsg != "" {

@@ -58,7 +58,12 @@ type CheckState struct {
 	// StatusUpdater state
 	Successes      int    `json:"successes"`
 	Failures       int    `json:"failures"`
-	PendingEventID string `json:"pending_event_id"`
+	// PendingEventID is retained only for backward compatibility with
+	// previously persisted state; it is no longer read or written.
+	//
+	// Deprecated: the active event ID now stays in the EventTracker until the
+	// resolution notification is sent, so no per-check pending ID is needed.
+	PendingEventID string `json:"pending_event_id,omitempty"`
 
 	// CheckStatus state
 	Status   Status `json:"status"`

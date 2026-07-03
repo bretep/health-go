@@ -58,7 +58,13 @@ func (a *ActionRunner) Success(message string, eventID string) {
 				action := *a.successAction
 				checkName := a.checkName
 				notifications := a.notifications
-				eventTracker := a.eventTracker
+				// Reserve the sequence number now, synchronously: the command can
+				// run for a long time, and the event's sequence counter may be
+				// cleared once the event ends.
+				var sequence int
+				if eventID != "" {
+					sequence = a.eventTracker.GetNextSequence(eventID)
+				}
 				go func() {
 					result := action.Run(message)
 					result.Name = checkName
@@ -69,9 +75,9 @@ func (a *ActionRunner) Success(message string, eventID string) {
 					// Include event_id and sequence so downstream knows which event just ended
 					if eventID != "" {
 						result.EventID = eventID
-						result.Sequence = eventTracker.GetNextSequence(eventID)
+						result.Sequence = sequence
 						result.Tags = append(result.Tags, fmt.Sprintf("event_id:%s", eventID))
-						result.Tags = append(result.Tags, fmt.Sprintf("sequence:%d", result.Sequence))
+						result.Tags = append(result.Tags, fmt.Sprintf("sequence:%d", sequence))
 					}
 					notifications.Send(result)
 				}()
@@ -107,7 +113,13 @@ func (a *ActionRunner) Failure(message string, eventID string) {
 				action := *a.failureAction
 				checkName := a.checkName
 				notifications := a.notifications
-				eventTracker := a.eventTracker
+				// Reserve the sequence number now, synchronously: the command can
+				// run for a long time, and the event's sequence counter may be
+				// cleared once the event ends.
+				var sequence int
+				if eventID != "" {
+					sequence = a.eventTracker.GetNextSequence(eventID)
+				}
 				go func() {
 					result := action.Run(message)
 					result.Name = checkName
@@ -118,9 +130,9 @@ func (a *ActionRunner) Failure(message string, eventID string) {
 					// Include event_id and sequence for failure action notifications
 					if eventID != "" {
 						result.EventID = eventID
-						result.Sequence = eventTracker.GetNextSequence(eventID)
+						result.Sequence = sequence
 						result.Tags = append(result.Tags, fmt.Sprintf("event_id:%s", eventID))
-						result.Tags = append(result.Tags, fmt.Sprintf("sequence:%d", result.Sequence))
+						result.Tags = append(result.Tags, fmt.Sprintf("sequence:%d", sequence))
 					}
 					notifications.Send(result)
 				}()
@@ -156,7 +168,13 @@ func (a *ActionRunner) Warning(message string, eventID string) {
 				action := *a.warningAction
 				checkName := a.checkName
 				notifications := a.notifications
-				eventTracker := a.eventTracker
+				// Reserve the sequence number now, synchronously: the command can
+				// run for a long time, and the event's sequence counter may be
+				// cleared once the event ends.
+				var sequence int
+				if eventID != "" {
+					sequence = a.eventTracker.GetNextSequence(eventID)
+				}
 				go func() {
 					result := action.Run(message)
 					result.Name = checkName
@@ -167,9 +185,9 @@ func (a *ActionRunner) Warning(message string, eventID string) {
 					// Include event_id and sequence for warning action notifications
 					if eventID != "" {
 						result.EventID = eventID
-						result.Sequence = eventTracker.GetNextSequence(eventID)
+						result.Sequence = sequence
 						result.Tags = append(result.Tags, fmt.Sprintf("event_id:%s", eventID))
-						result.Tags = append(result.Tags, fmt.Sprintf("sequence:%d", result.Sequence))
+						result.Tags = append(result.Tags, fmt.Sprintf("sequence:%d", sequence))
 					}
 					notifications.Send(result)
 				}()
@@ -205,7 +223,13 @@ func (a *ActionRunner) Timeout(message string, eventID string) {
 				action := *a.timeoutAction
 				checkName := a.checkName
 				notifications := a.notifications
-				eventTracker := a.eventTracker
+				// Reserve the sequence number now, synchronously: the command can
+				// run for a long time, and the event's sequence counter may be
+				// cleared once the event ends.
+				var sequence int
+				if eventID != "" {
+					sequence = a.eventTracker.GetNextSequence(eventID)
+				}
 				go func() {
 					result := action.Run(message)
 					result.Name = checkName
@@ -216,9 +240,9 @@ func (a *ActionRunner) Timeout(message string, eventID string) {
 					// Include event_id and sequence for timeout action notifications
 					if eventID != "" {
 						result.EventID = eventID
-						result.Sequence = eventTracker.GetNextSequence(eventID)
+						result.Sequence = sequence
 						result.Tags = append(result.Tags, fmt.Sprintf("event_id:%s", eventID))
-						result.Tags = append(result.Tags, fmt.Sprintf("sequence:%d", result.Sequence))
+						result.Tags = append(result.Tags, fmt.Sprintf("sequence:%d", sequence))
 					}
 					notifications.Send(result)
 				}()

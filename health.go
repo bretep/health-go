@@ -18,7 +18,10 @@ import (
 
 // New instantiates and build new health check container
 func New(opts ...Option) (*Health, error) {
-	notificationsChannel := make(chan CheckNotification, 50)
+	// Generously sized: notifications that don't fit are dropped, and a
+	// dropped state-transition notification is never resent, which leaves
+	// downstream alerts permanently unresolved.
+	notificationsChannel := make(chan CheckNotification, 512)
 	notificationsSender := NewNotificationSender(notificationsChannel)
 	eventTracker := NewEventTracker()
 

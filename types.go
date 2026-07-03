@@ -185,11 +185,6 @@ type (
 		notifications *Notifications
 		notifiers     []string
 		eventTracker  *EventTracker
-
-		// pendingEventID stores the event ID when transitioning to healthy.
-		// This is needed because GetOrCreateEventID deletes the event on first call,
-		// but we may need multiple consecutive successes before sending notification.
-		pendingEventID string
 	}
 
 	// Action contains configuration for running an action
