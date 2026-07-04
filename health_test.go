@@ -101,7 +101,7 @@ func TestHealthHandler(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for checks to complete:
-	// - interval (max random offset before first check)
+	// - interval (max random offset between first and second check)
 	// - successesNeeded * interval (for mongodb to reach passing threshold)
 	// - snailTimeout (for the timeout to trigger)
 	// - buffer for timing variations
@@ -156,7 +156,7 @@ func TestHealth_Status(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for checks to run and timeout:
-	// - interval (max random offset)
+	// - interval (max random offset between first and second check)
 	// - check2Timeout (longest timeout)
 	// - buffer
 	time.Sleep(checkInterval + check2Timeout + time.Millisecond*500)

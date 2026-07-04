@@ -39,7 +39,13 @@ func (c *CheckConfig) Pause() {
 
 // runCheckWithChan runs a check until the pausedChan is closed
 func (c *CheckConfig) runCheckWithChan(pausedChan <-chan struct{}) {
-	// Offset starting health check with random jitter
+	// The first check runs immediately so a freshly started service reports
+	// real status right away instead of "initializing" for up to one full
+	// interval — long-interval checks (minutes) made that window untenable.
+	c.check()
+	// Random jitter before the second run desynchronizes the steady-state
+	// cadence across a fleet whose services restart in lockstep; subsequent
+	// checks then tick at the configured interval with that phase offset.
 	var offset time.Duration
 	if c.Interval != 0 {
 		offset = time.Duration(rand.Uint64() % uint64(c.Interval))
