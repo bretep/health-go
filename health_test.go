@@ -770,8 +770,19 @@ func TestStatusUpdater_FailuresBeforeCritical(t *testing.T) {
 	assert.Equal(t, StatusCritical, status)
 	assert.EqualError(t, err, "err2", "error should update after threshold met")
 
-	// No notification expected - status was already Critical (from initialization)
-	// Notifications only fire on status *changes*
+	// The first threshold-crossing result must notify even though the
+	// internal pre-first-result status is a synthetic Critical: a check
+	// whose first-ever result is critical (e.g. an expired cert found on
+	// first run) must not have its alert silently swallowed.
+	select {
+	case n := <-channel:
+		assert.Contains(t, n.Message, "err2")
+	case <-time.After(time.Millisecond * 50):
+		t.Fatal("expected an alert for the first threshold-crossing critical result")
+	}
+
+	// A repeat of the same status must not re-notify.
+	statusUpdater.update(StatusCritical, errors.New("err3"), false)
 	select {
 	case <-channel:
 		t.Fatal("unexpected notification - status didn't change from Critical")

@@ -93,6 +93,11 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 
 	oldStatus, _ := s.check.Get()
 
+	// A first-ever result must always notify: the pre-first-result status is
+	// a synthetic StatusCritical, so equality against it is meaningless (a
+	// check whose first result is critical would otherwise never alert).
+	firstResult := !s.initialized
+
 	// The active event ID must stay stable from the moment an alert fires until
 	// the resolution notification is actually sent. To guarantee that, the event
 	// is only created or consumed inside a threshold branch below: sub-threshold
@@ -107,7 +112,8 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		if s.failures >= s.failuresBeforeCritical {
 			eventID := s.getOrCreateEventID(status)
 			s.check.Update(status, err)
-			if oldStatus != status && !disableNotification {
+			s.initialized = true
+			if (oldStatus != status || firstResult) && !disableNotification {
 				s.sendNotification(status, statusMessage, eventID)
 			}
 			s.actions.Timeout(statusMessage, eventID)
@@ -123,7 +129,8 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 			// notification is really going out.
 			eventID := s.getOrCreateEventID(status)
 			s.check.Update(status, err)
-			if oldStatus != status && !disableNotification {
+			s.initialized = true
+			if (oldStatus != status || firstResult) && !disableNotification {
 				s.sendNotification(status, statusMessage, eventID)
 			}
 			s.actions.Success(statusMessage, eventID)
@@ -141,7 +148,8 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		if s.failures >= s.failuresBeforeWarning {
 			eventID := s.getOrCreateEventID(status)
 			s.check.Update(StatusWarning, err)
-			if oldStatus != status && !disableNotification {
+			s.initialized = true
+			if (oldStatus != status || firstResult) && !disableNotification {
 				s.sendNotification(status, statusMessage, eventID)
 			}
 			s.actions.Warning(statusMessage, eventID)
@@ -157,7 +165,8 @@ func (s *StatusUpdater) update(status Status, err error, disableNotification boo
 		if s.failures >= s.failuresBeforeCritical {
 			eventID := s.getOrCreateEventID(status)
 			s.check.Update(status, err)
-			if oldStatus != status && !disableNotification {
+			s.initialized = true
+			if (oldStatus != status || firstResult) && !disableNotification {
 				s.sendNotification(status, statusMessage, eventID)
 			}
 			s.actions.Failure(statusMessage, eventID)
@@ -260,6 +269,9 @@ func (s *StatusUpdater) RestoreState(state *CheckState) {
 
 	s.successes = state.Successes
 	s.failures = state.Failures
+	// Restored state is a real prior status: equality with the next result
+	// must suppress duplicate alerts across process restarts.
+	s.initialized = true
 
 	var err error
 	if state.ErrorMsg != "" {

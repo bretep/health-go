@@ -182,6 +182,13 @@ type (
 		failuresBeforeWarning  int
 		failuresBeforeCritical int
 
+		// initialized is false until the first threshold-crossing result
+		// (or a state restore). The internal starting status is a synthetic
+		// StatusCritical, so without this flag a check whose first-ever
+		// result is critical would be critical→critical — no transition,
+		// and its alert would be silently swallowed.
+		initialized bool
+
 		notifications *Notifications
 		notifiers     []string
 		eventTracker  *EventTracker
