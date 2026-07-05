@@ -120,3 +120,63 @@ func TestRestoredStateNotifiesOnRealTransition(t *testing.T) {
 		t.Fatalf("expected 1 recovery notification after restore, got %d", len(got))
 	}
 }
+
+// A restore into an active incident must emit exactly one notification
+// tagged "restored:true" so lifecycle consumers (e.g. an Alertmanager
+// forwarder) can rebuild their active-alert state.
+func TestRestoreNonPassingEmitsRestoredNotification(t *testing.T) {
+	s, ch := newTestUpdater(t, true)
+	s.RestoreState(&CheckState{
+		Status:   StatusCritical,
+		ErrorMsg: "cert expired",
+		Failures: 1,
+	})
+
+	got := drainNotifications(ch)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 restored notification, got %d", len(got))
+	}
+	n := got[0]
+	var hasRestored, hasStatus bool
+	for _, tag := range n.Tags {
+		if tag == "restored:true" {
+			hasRestored = true
+		}
+		if tag == "status:critical" {
+			hasStatus = true
+		}
+	}
+	if !hasRestored || !hasStatus {
+		t.Errorf("tags missing restored/status markers: %v", n.Tags)
+	}
+	if n.Message != "Status: critical, Error: cert expired" {
+		t.Errorf("unexpected message: %q", n.Message)
+	}
+	_ = s
+}
+
+// Restoring a passing state must stay completely silent.
+func TestRestorePassingEmitsNothing(t *testing.T) {
+	s, ch := newTestUpdater(t, true)
+	s.RestoreState(&CheckState{Status: StatusPassing})
+	if got := drainNotifications(ch); len(got) != 0 {
+		t.Fatalf("expected silence on passing restore, got %d notifications", len(got))
+	}
+	_ = s
+}
+
+// Regular transition notifications must NOT carry the restored tag.
+func TestTransitionNotificationHasNoRestoredTag(t *testing.T) {
+	s, ch := newTestUpdater(t, false)
+	drainNotifications(ch)
+	s.update(StatusCritical, errors.New("boom"), false)
+	got := drainNotifications(ch)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(got))
+	}
+	for _, tag := range got[0].Tags {
+		if tag == "restored:true" {
+			t.Error("transition notification must not be tagged restored")
+		}
+	}
+}

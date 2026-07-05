@@ -185,7 +185,7 @@ func (s *StatusUpdater) getOrCreateEventID(status Status) string {
 }
 
 // sendNotification builds and sends a notification, only getting sequence number when actually sending
-func (s *StatusUpdater) sendNotification(status Status, message, eventID string) {
+func (s *StatusUpdater) sendNotification(status Status, message, eventID string, extraTags ...string) {
 	var sequence int
 	if s.eventTracker != nil {
 		sequence = s.eventTracker.GetNextSequence(eventID)
@@ -197,9 +197,9 @@ func (s *StatusUpdater) sendNotification(status Status, message, eventID string)
 		Notifiers: s.notifiers,
 		EventID:   eventID,
 		Sequence:  sequence,
-		Tags: []string{
+		Tags: append([]string{
 			fmt.Sprintf("status:%s", status),
-		},
+		}, extraTags...),
 	}
 	if eventID != "" {
 		notification.Tags = append(notification.Tags, fmt.Sprintf("event_id:%s", eventID))
@@ -281,5 +281,21 @@ func (s *StatusUpdater) RestoreState(state *CheckState) {
 
 	if s.actions != nil && state.ActionRunnerState != nil {
 		s.actions.RestoreState(state.ActionRunnerState)
+	}
+
+	// A non-passing restore means an incident survived the restart. The
+	// restore is deliberately silent for human-facing notifiers (no
+	// duplicate alerts), but lifecycle-oriented consumers — e.g. an
+	// Alertmanager forwarder that must re-register active alerts or they
+	// expire — need to rebuild state. Emit a notification tagged
+	// "restored:true"; consumers decide whether to act on it.
+	switch state.Status {
+	case StatusWarning, StatusCritical, StatusTimeout:
+		statusMessage := fmt.Sprintf("Status: %s", state.Status)
+		if state.ErrorMsg != "" {
+			statusMessage = fmt.Sprintf("%s, Error: %s", statusMessage, state.ErrorMsg)
+		}
+		eventID := s.getOrCreateEventID(state.Status)
+		s.sendNotification(state.Status, statusMessage, eventID, "restored:true")
 	}
 }

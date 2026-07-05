@@ -1801,7 +1801,11 @@ func TestRegister_WithPersistedState_NoInitializingNotification(t *testing.T) {
 
 	notifications := h.Subscribe()
 
-	// Register a check - should NOT send initializing notification due to persisted state
+	// Register a check - should NOT send an initializing notification due
+	// to persisted state. A non-passing restore emits exactly one
+	// "restored:true"-tagged notification instead, so lifecycle consumers
+	// (e.g. an Alertmanager forwarder) can rebuild active-alert state;
+	// human-facing notifiers are expected to filter on the tag.
 	err = h.Register(CheckConfig{
 		Name:     "test-check",
 		Interval: time.Second,
@@ -1809,12 +1813,22 @@ func TestRegister_WithPersistedState_NoInitializingNotification(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Verify no notification was sent (state was restored silently)
 	select {
 	case notification := <-notifications:
-		t.Fatalf("expected no notification when restoring state, got: %s", notification.Message)
+		assert.NotEqual(t, string(StatusInitializing), notification.Message,
+			"restore must not send the initializing notification")
+		assert.Contains(t, notification.Tags, "restored:true",
+			"restore notification must be tagged restored:true")
 	case <-time.After(time.Millisecond * 100):
-		// Expected - no notification because state was restored
+		t.Fatal("expected a restored-tagged notification for non-passing restore")
+	}
+
+	// And nothing further beyond that single restored notification.
+	select {
+	case notification := <-notifications:
+		t.Fatalf("expected only one notification on restore, got extra: %s", notification.Message)
+	case <-time.After(time.Millisecond * 100):
+		// Expected
 	}
 
 	// Verify the state was actually restored
