@@ -209,10 +209,14 @@ curl localhost:3000/status
 | Status | HTTP Code | Description |
 |--------|-----------|-------------|
 | `passing` | 200 | All checks healthy |
-| `warning` | 429 | Check failed but `SkipOnErr` is true |
+| `warning` | 429 | Check failed or timed out but `SkipOnErr` is true (or the check returned `IsWarning`) |
 | `critical` | 503 | Check failed |
 | `timeout` | 503 | Check exceeded timeout |
 | `initializing` | 503 | Check hasn't met `SuccessesBeforePassing` threshold yet |
+
+The overall status is the **worst** check's, in this order: passing < warning < initializing
+< timeout < critical. One timed-out or initializing check makes the answer 503 whatever the
+other checks say.
 
 ## CheckConfig Options
 
