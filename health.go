@@ -209,6 +209,8 @@ func (h *Health) Status(ctx context.Context) Check {
 			mu.Lock()
 			defer mu.Unlock()
 			// The worst status wins, whatever the order the checks are merged in.
+			// SkipOnErr already turned a returned error into a warning (check.go); a
+			// timeout is not an application error and stays a timeout.
 			if severity(checkStatus) > severity(status) {
 				status = checkStatus
 			}

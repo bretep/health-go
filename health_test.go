@@ -110,14 +110,16 @@ func TestHealthHandler(t *testing.T) {
 	handler := h.Handler()
 	handler.ServeHTTP(res, req)
 
-	// StatusWarning returns 429 TooManyRequests
-	assert.Equal(t, http.StatusTooManyRequests, res.Code, "check handler returned wrong check code")
+	// snail-service timed out: a timeout is not an application error, SkipOnErr does
+	// not soften it, and the worst check decides: 503 (it was 429 only because the old
+	// merge let rabbitmq's warning overwrite the timeout).
+	assert.Equal(t, http.StatusServiceUnavailable, res.Code, "check handler returned wrong check code")
 
 	body := make(map[string]any)
 	err = json.NewDecoder(res.Body).Decode(&body)
 	require.NoError(t, err)
 
-	assert.Equal(t, string(StatusWarning), body["check"], "body returned wrong check")
+	assert.Equal(t, string(StatusTimeout), body["check"], "body returned wrong check")
 
 	failure, ok := body["failures"]
 	assert.True(t, ok, "body returned nil failures field")
@@ -1972,4 +1974,30 @@ func TestHandler_TimedOutCheckAmongPassingIs503(t *testing.T) {
 		h.HandlerFunc(res, req)
 		require.Equal(t, http.StatusServiceUnavailable, res.Code, "iteration %d", i)
 	}
+}
+
+// SkipOnErr covers errors the check returns, never a timeout: a SkipOnErr check that
+// times out records timeout (TimeoutAction) and fails the component.
+func TestCheck_SkipOnErrTimeoutFiresTimeoutAction(t *testing.T) {
+	h, err := New()
+	require.NoError(t, err)
+	require.NoError(t, h.Register(CheckConfig{
+		Name: "slow", Interval: time.Second, Timeout: 50 * time.Millisecond, SkipOnErr: true,
+		FailuresBeforeCritical: 1,
+		Check: func(ctx context.Context) CheckResponse {
+			<-ctx.Done()
+			time.Sleep(100 * time.Millisecond)
+			return CheckResponse{}
+		},
+	}))
+	h.mu.Lock()
+	c := h.checks["slow"]
+	h.mu.Unlock()
+	c.check()
+	require.Eventually(t, func() bool {
+		s, _ := c.Status.check.Get()
+		return s == StatusTimeout
+	}, 3*time.Second, 20*time.Millisecond, "a SkipOnErr check that times out must record timeout")
+	// SkipOnErr covers returned errors only: the timeout fails the component.
+	assert.Equal(t, StatusTimeout, h.Status(context.Background()).Status)
 }

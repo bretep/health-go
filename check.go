@@ -84,13 +84,7 @@ func (c *CheckConfig) check() {
 
 		select {
 		case <-ctx.Done():
-			// A timeout is a failure like any other: with SkipOnErr it degrades the
-			// component (warning, as an error does below), without it it fails it.
-			status := StatusTimeout
-			if c.SkipOnErr {
-				status = StatusWarning
-			}
-			c.Status.update(status, errors.New(string(StatusTimeout)), false)
+			c.Status.update(StatusTimeout, errors.New(string(StatusTimeout)), false)
 		case res := <-resCh:
 			status := StatusPassing
 			if res.Error != nil {
