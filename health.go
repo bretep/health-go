@@ -154,6 +154,25 @@ func (h *Health) HandlerFunc(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// severity orders statuses for the overall status: the worst check decides it. A
+// timed-out check fails the component (StatusTimeout) and one still initializing is not
+// ready, so either makes the answer 503 even when every other check passes; critical is
+// worst. An unknown status counts as critical.
+func severity(s Status) int {
+	switch s {
+	case StatusPassing:
+		return 0
+	case StatusWarning:
+		return 1
+	case StatusInitializing:
+		return 2
+	case StatusTimeout:
+		return 3
+	default:
+		return 4
+	}
+}
+
 // Status returns that check of the overall health checks
 func (h *Health) Status(ctx context.Context) Check {
 	h.mu.Lock()
@@ -189,15 +208,8 @@ func (h *Health) Status(ctx context.Context) Check {
 
 			mu.Lock()
 			defer mu.Unlock()
-			// Prioritize Critical status
-			switch status {
-			case StatusCritical:
-				// Already critical, don't change
-			case StatusWarning:
-				if checkStatus == StatusCritical {
-					status = checkStatus
-				}
-			default:
+			// The worst status wins, whatever the order the checks are merged in.
+			if severity(checkStatus) > severity(status) {
 				status = checkStatus
 			}
 

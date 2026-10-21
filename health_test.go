@@ -1905,3 +1905,71 @@ func (m *mockStatePersister) LoadEventTrackerState(ctx context.Context) (*EventT
 func (m *mockStatePersister) Close() error {
 	return nil
 }
+
+// A timed-out or initializing check must decide the overall status whatever the order
+// the checks are merged in (they are merged from goroutines: random order). Before the
+// fix any check merged after it, a passing one included, replaced it: a node with a
+// timed-out check could answer 200.
+func TestStatus_AggregationPriority_WorstWinsInAnyOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		set  map[string]Status
+		want Status
+	}{
+		{"timeout beats passing", map[string]Status{"a": StatusTimeout, "b": StatusPassing, "c": StatusPassing, "d": StatusPassing}, StatusTimeout},
+		{"timeout beats warning", map[string]Status{"a": StatusTimeout, "b": StatusWarning, "c": StatusPassing}, StatusTimeout},
+		{"critical beats timeout", map[string]Status{"a": StatusTimeout, "b": StatusCritical, "c": StatusPassing}, StatusCritical},
+		{"initializing beats passing", map[string]Status{"a": StatusInitializing, "b": StatusPassing, "c": StatusPassing}, StatusInitializing},
+		{"initializing beats warning", map[string]Status{"a": StatusInitializing, "b": StatusWarning}, StatusInitializing},
+		{"timeout beats initializing", map[string]Status{"a": StatusInitializing, "b": StatusTimeout}, StatusTimeout},
+		{"warning beats passing", map[string]Status{"a": StatusWarning, "b": StatusPassing, "c": StatusPassing}, StatusWarning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := New()
+			require.NoError(t, err)
+			for name := range tc.set {
+				require.NoError(t, h.Register(CheckConfig{
+					Name:     name,
+					Interval: time.Second,
+					Check:    func(context.Context) CheckResponse { return CheckResponse{} },
+				}))
+			}
+			h.mu.Lock()
+			for name, s := range tc.set {
+				h.checks[name].Status.check.Update(s, nil)
+			}
+			h.mu.Unlock()
+			for i := 0; i < 200; i++ {
+				require.Equal(t, tc.want, h.Status(context.Background()).Status, "iteration %d", i)
+			}
+		})
+	}
+}
+
+func TestHandler_TimedOutCheckAmongPassingIs503(t *testing.T) {
+	h, err := New()
+	require.NoError(t, err)
+	for _, name := range []string{"slow", "a", "b", "c"} {
+		require.NoError(t, h.Register(CheckConfig{
+			Name:     name,
+			Interval: time.Second,
+			Check:    func(context.Context) CheckResponse { return CheckResponse{} },
+		}))
+	}
+	h.mu.Lock()
+	for name, c := range h.checks {
+		if name == "slow" {
+			c.Status.check.Update(StatusTimeout, errors.New(string(StatusTimeout)))
+		} else {
+			c.Status.check.Update(StatusPassing, nil)
+		}
+	}
+	h.mu.Unlock()
+	for i := 0; i < 100; i++ {
+		res := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/status", nil)
+		h.HandlerFunc(res, req)
+		require.Equal(t, http.StatusServiceUnavailable, res.Code, "iteration %d", i)
+	}
+}
