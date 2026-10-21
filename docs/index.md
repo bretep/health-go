@@ -224,7 +224,7 @@ type CheckConfig struct {
 	// Check is the function that performs the health check (required)
 	Check CheckFunc
 
-	// Interval is how often the check runs (default: 10s, minimum: 1s)
+	// Interval is how often the check runs (default when unset: 10s; minimum: 1s, a shorter one is raised to 1s)
 	Interval time.Duration
 
 	// Timeout for each check execution (default: 2s)
