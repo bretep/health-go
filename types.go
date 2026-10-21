@@ -23,8 +23,10 @@ const (
 	// StatusInitializing healthcheck is starting up and has not meet the passing threshold
 	StatusInitializing Status = "initializing"
 	// MinimumInterval is the minimum time between checks
-	// to prevent fork bombing a system
+	// to prevent fork bombing a system; a shorter interval is raised to it
 	MinimumInterval = time.Second
+	// DefaultInterval is the interval of a check registered without one
+	DefaultInterval = 10 * time.Second
 )
 
 type (

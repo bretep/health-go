@@ -533,23 +533,37 @@ func TestEventTracker_MaintenanceCleanup(t *testing.T) {
 // --- Register Defaults Tests ---
 
 func TestRegister_DefaultInterval(t *testing.T) {
-	h, err := New()
-	require.NoError(t, err)
+	cases := []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{"unset gets the default", 0, DefaultInterval},
+		{"negative gets the default", -time.Second, DefaultInterval},
+		{"below the minimum is raised to the minimum", 100 * time.Millisecond, MinimumInterval},
+		{"just below the minimum is raised to the minimum", 999 * time.Millisecond, MinimumInterval},
+		{"the minimum is kept", MinimumInterval, MinimumInterval},
+		{"above the minimum is kept", 1500 * time.Millisecond, 1500 * time.Millisecond},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := New()
+			require.NoError(t, err)
 
-	// Register with interval below MinimumInterval
-	err = h.Register(CheckConfig{
-		Name:     "test-check",
-		Interval: time.Millisecond * 100, // Below MinimumInterval
-		Check:    func(context.Context) CheckResponse { return CheckResponse{} },
-	})
-	require.NoError(t, err)
+			err = h.Register(CheckConfig{
+				Name:     "test-check",
+				Interval: tc.interval,
+				Check:    func(context.Context) CheckResponse { return CheckResponse{} },
+			})
+			require.NoError(t, err)
 
-	// The interval should be set to 10 seconds (default when below minimum)
-	h.mu.Lock()
-	check := h.checks["test-check"]
-	h.mu.Unlock()
+			h.mu.Lock()
+			check := h.checks["test-check"]
+			h.mu.Unlock()
 
-	assert.Equal(t, 10*time.Second, check.Interval)
+			assert.Equal(t, tc.want, check.Interval)
+		})
+	}
 }
 
 func TestRegister_DefaultTimeout(t *testing.T) {

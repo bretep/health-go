@@ -63,8 +63,14 @@ func (h *Health) Subscribe() (c <-chan CheckNotification) {
 
 // Register registers a check config to be performed.
 func (h *Health) Register(c CheckConfig) error {
-	if c.Interval < MinimumInterval {
-		c.Interval = 10 * time.Second
+	switch {
+	case c.Interval <= 0:
+		// Not set: the default.
+		c.Interval = DefaultInterval
+	case c.Interval < MinimumInterval:
+		// Set but too short: the floor, not the default. Replacing a requested 200ms
+		// with 10s made the check fifty times slower than asked, silently.
+		c.Interval = MinimumInterval
 	}
 
 	if c.Timeout == 0 {
