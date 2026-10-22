@@ -63,8 +63,14 @@ func (h *Health) Subscribe() (c <-chan CheckNotification) {
 
 // Register registers a check config to be performed.
 func (h *Health) Register(c CheckConfig) error {
-	if c.Interval < MinimumInterval {
-		c.Interval = 10 * time.Second
+	switch {
+	case c.Interval <= 0:
+		// Not set: the default.
+		c.Interval = DefaultInterval
+	case c.Interval < MinimumInterval:
+		// Set but too short: the floor, not the default. Replacing a requested 200ms
+		// with 10s made the check fifty times slower than asked, silently.
+		c.Interval = MinimumInterval
 	}
 
 	if c.Timeout == 0 {
@@ -154,6 +160,25 @@ func (h *Health) HandlerFunc(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// severity orders statuses for the overall status: the worst check decides it. A
+// timed-out check fails the component (StatusTimeout) and one still initializing is not
+// ready, so either makes the answer 503 even when every other check passes; critical is
+// worst. An unknown status counts as critical.
+func severity(s Status) int {
+	switch s {
+	case StatusPassing:
+		return 0
+	case StatusWarning:
+		return 1
+	case StatusInitializing:
+		return 2
+	case StatusTimeout:
+		return 3
+	default:
+		return 4
+	}
+}
+
 // Status returns that check of the overall health checks
 func (h *Health) Status(ctx context.Context) Check {
 	h.mu.Lock()
@@ -189,15 +214,10 @@ func (h *Health) Status(ctx context.Context) Check {
 
 			mu.Lock()
 			defer mu.Unlock()
-			// Prioritize Critical status
-			switch status {
-			case StatusCritical:
-				// Already critical, don't change
-			case StatusWarning:
-				if checkStatus == StatusCritical {
-					status = checkStatus
-				}
-			default:
+			// The worst status wins, whatever the order the checks are merged in.
+			// SkipOnErr already turned a returned error into a warning (check.go); a
+			// timeout is not an application error and stays a timeout.
+			if severity(checkStatus) > severity(status) {
 				status = checkStatus
 			}
 

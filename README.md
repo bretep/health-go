@@ -216,13 +216,13 @@ type CheckConfig struct {
 	// Check is the function that performs the health check (required)
 	Check CheckFunc
 
-	// Interval is how often the check runs (default: 10s, minimum: 1s)
+	// Interval is how often the check runs (default when unset: 10s; minimum: 1s, a shorter one is raised to 1s)
 	Interval time.Duration
 
 	// Timeout for each check execution (default: 2s)
 	Timeout time.Duration
 
-	// SkipOnErr returns Warning instead of Critical on failure
+	// SkipOnErr returns Warning instead of Critical when the check returns an error; a timeout is never softened
 	SkipOnErr bool
 
 	// Status thresholds for debouncing
@@ -246,10 +246,15 @@ type CheckConfig struct {
 | Status | HTTP Code | Description |
 |--------|-----------|-------------|
 | `passing` | 200 | All checks healthy |
-| `warning` | 429 | Check failed but `SkipOnErr` is true |
+| `warning` | 429 | Check returned an error but `SkipOnErr` is true, or returned `IsWarning` |
 | `critical` | 503 | Check failed |
 | `timeout` | 503 | Check exceeded timeout |
 | `initializing` | 503 | Check hasn't met `SuccessesBeforePassing` threshold yet |
+
+The overall status is the **worst** check's, in this order: passing < warning < initializing
+< timeout < critical. One timed-out or initializing check makes the answer 503 whatever the
+other checks say. `SkipOnErr` covers errors a check returns, never a timeout: a check that
+times out is `timeout` (and runs its `TimeoutAction`) with or without `SkipOnErr`.
 
 ## Status Thresholds
 
@@ -346,7 +351,8 @@ h.Register(health.CheckConfig{
 | Field | Description |
 |-------|-------------|
 | `Command` | Shell command to execute |
-| `UnlockAfterDuration` | Minimum time between executions (cooldown) |
+| `UnlockAfterDuration` | Minimum time between executions (cooldown); 0: may run again any time |
+| `Timeout` | How long the command may run; unset: the cooldown if set, else 60s (`DefaultActionTimeout`) |
 | `UnlockOnlyAfterHealthy` | Only allow running after status was previously healthy |
 | `SendCommandOutput` | Include command stdout/stderr in notification |
 | `Notifiers` | List of notifier names to send results to |

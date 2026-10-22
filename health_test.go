@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -110,14 +112,16 @@ func TestHealthHandler(t *testing.T) {
 	handler := h.Handler()
 	handler.ServeHTTP(res, req)
 
-	// StatusWarning returns 429 TooManyRequests
-	assert.Equal(t, http.StatusTooManyRequests, res.Code, "check handler returned wrong check code")
+	// snail-service timed out: a timeout is not an application error, SkipOnErr does
+	// not soften it, and the worst check decides: 503 (it was 429 only because the old
+	// merge let rabbitmq's warning overwrite the timeout).
+	assert.Equal(t, http.StatusServiceUnavailable, res.Code, "check handler returned wrong check code")
 
 	body := make(map[string]any)
 	err = json.NewDecoder(res.Body).Decode(&body)
 	require.NoError(t, err)
 
-	assert.Equal(t, string(StatusWarning), body["check"], "body returned wrong check")
+	assert.Equal(t, string(StatusTimeout), body["check"], "body returned wrong check")
 
 	failure, ok := body["failures"]
 	assert.True(t, ok, "body returned nil failures field")
@@ -533,23 +537,37 @@ func TestEventTracker_MaintenanceCleanup(t *testing.T) {
 // --- Register Defaults Tests ---
 
 func TestRegister_DefaultInterval(t *testing.T) {
-	h, err := New()
-	require.NoError(t, err)
+	cases := []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{"unset gets the default", 0, DefaultInterval},
+		{"negative gets the default", -time.Second, DefaultInterval},
+		{"below the minimum is raised to the minimum", 100 * time.Millisecond, MinimumInterval},
+		{"just below the minimum is raised to the minimum", 999 * time.Millisecond, MinimumInterval},
+		{"the minimum is kept", MinimumInterval, MinimumInterval},
+		{"above the minimum is kept", 1500 * time.Millisecond, 1500 * time.Millisecond},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := New()
+			require.NoError(t, err)
 
-	// Register with interval below MinimumInterval
-	err = h.Register(CheckConfig{
-		Name:     "test-check",
-		Interval: time.Millisecond * 100, // Below MinimumInterval
-		Check:    func(context.Context) CheckResponse { return CheckResponse{} },
-	})
-	require.NoError(t, err)
+			err = h.Register(CheckConfig{
+				Name:     "test-check",
+				Interval: tc.interval,
+				Check:    func(context.Context) CheckResponse { return CheckResponse{} },
+			})
+			require.NoError(t, err)
 
-	// The interval should be set to 10 seconds (default when below minimum)
-	h.mu.Lock()
-	check := h.checks["test-check"]
-	h.mu.Unlock()
+			h.mu.Lock()
+			check := h.checks["test-check"]
+			h.mu.Unlock()
 
-	assert.Equal(t, 10*time.Second, check.Interval)
+			assert.Equal(t, tc.want, check.Interval)
+		})
+	}
 }
 
 func TestRegister_DefaultTimeout(t *testing.T) {
@@ -930,6 +948,12 @@ func TestHandler_StatusCodes(t *testing.T) {
 			expectedCode:   http.StatusServiceUnavailable,
 			expectedStatus: string(StatusTimeout),
 		},
+		{
+			name:           "Initializing returns 503",
+			checkStatus:    StatusInitializing,
+			expectedCode:   http.StatusServiceUnavailable,
+			expectedStatus: string(StatusInitializing),
+		},
 	}
 
 	for _, tt := range tests {
@@ -1005,8 +1029,9 @@ func TestActionRunner_StatusTransitions(t *testing.T) {
 	// No actions configured - just test status tracking
 	runner := NewActionRunner("test-check", nil, nil, nil, nil, notifications, eventTracker)
 
-	// Initial status is Critical
-	assert.Equal(t, StatusCritical, runner.status)
+	// Initial status: no result yet (not critical, so a check failing from the start
+	// is a transition into failure)
+	assert.Equal(t, StatusInitializing, runner.status)
 
 	// Transition to Success
 	runner.Success("success message", "")
@@ -1025,44 +1050,111 @@ func TestActionRunner_StatusTransitions(t *testing.T) {
 	assert.Equal(t, StatusTimeout, runner.status)
 }
 
-func TestActionRunner_UnlockOnlyAfterHealthy(t *testing.T) {
-	channel := make(chan CheckNotification, 10)
-	notifications := NewNotificationSender(channel)
-	eventTracker := NewEventTracker()
+// countingAction appends a line to a marker file per run; runs(path) counts them.
+func countingAction(t *testing.T, onlyAfterHealthy bool) (*Action, string) {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), "runs")
+	return &Action{Command: "echo run >> " + marker, UnlockOnlyAfterHealthy: onlyAfterHealthy}, marker
+}
 
-	actionRan := false
-	failureAction := &Action{
-		Command:                "echo test",
-		UnlockOnlyAfterHealthy: true,
-		UnlockAfterDuration:    time.Millisecond * 10,
+func runs(path string) int {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
 	}
+	return strings.Count(string(b), "\n")
+}
 
-	runner := NewActionRunner("test-check", nil, nil, failureAction, nil, notifications, eventTracker)
+// waitRuns waits until the action ran want times, then makes sure no extra run follows.
+func waitRuns(t *testing.T, path string, want int, why string) {
+	t.Helper()
+	require.Eventually(t, func() bool { return runs(path) >= want }, 3*time.Second, 10*time.Millisecond,
+		"%s: want %d run(s), have %d", why, want, runs(path))
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, want, runs(path), "%s: no extra run", why)
+}
 
-	// First failure - should be allowed (transitioning from initial Critical to Critical still triggers)
-	runner.Failure("fail1", "event1")
+// A FailureAction with UnlockOnlyAfterHealthy runs once per incident: not again while the
+// check stays failed, again only after it was healthy in between.
+func TestActionRunner_UnlockOnlyAfterHealthy(t *testing.T) {
+	failureAction, marker := countingAction(t, true)
+	runner := NewActionRunner("test-check", nil, nil, failureAction, nil,
+		NewNotificationSender(make(chan CheckNotification, 10)), NewEventTracker())
 
-	// Wait a bit for async action
-	time.Sleep(time.Millisecond * 50)
+	runner.Failure("fail", "event1")
+	waitRuns(t, marker, 1, "first failure")
 
-	// Second failure - should NOT run (already in Critical, UnlockOnlyAfterHealthy)
-	failureAction.Command = "" // Clear command so we can detect if it would run
-	runner.Failure("fail2", "event1")
+	runner.Failure("still failing", "event1")
+	waitRuns(t, marker, 1, "still failing: same incident")
 
-	// Transition to healthy
-	runner.Success("success", "event1")
+	runner.Success("recovered", "event1")
+	runner.Failure("fail again", "event2")
+	waitRuns(t, marker, 2, "new incident after recovery")
+}
 
-	// Now failure should be allowed again
-	actionRan = false
-	failureAction.Command = "echo allowed"
-	runner.Failure("fail3", "event2")
+// A check that fails from the very start (a service that boots broken) runs its
+// UnlockOnlyAfterHealthy FailureAction (and WarningAction): the runner starts with no
+// result, not in critical. It used to start in critical and never ran them.
+func TestActionRunner_FailingFromTheStartRunsActions(t *testing.T) {
+	failureAction, failures := countingAction(t, true)
+	warningAction, warnings := countingAction(t, true)
 
-	// Give async action time to potentially run
-	time.Sleep(time.Millisecond * 50)
+	runner := NewActionRunner("boots-broken", nil, nil, failureAction, nil,
+		NewNotificationSender(make(chan CheckNotification, 10)), NewEventTracker())
+	runner.Failure("down from the start", "event1")
+	waitRuns(t, failures, 1, "failure from the start")
 
-	// The action should have been allowed to run (canRun set to true)
-	// We can't easily test the actual command execution without side effects
-	_ = actionRan
+	runner = NewActionRunner("boots-degraded", nil, warningAction, nil, nil,
+		NewNotificationSender(make(chan CheckNotification, 10)), NewEventTracker())
+	runner.Warning("degraded from the start", "event2")
+	waitRuns(t, warnings, 1, "warning from the start")
+}
+
+// A restored runner keeps its saved status: a check still failing in the incident it was
+// in before the restart does not run its UnlockOnlyAfterHealthy FailureAction again.
+func TestActionRunner_RestoredIncidentDoesNotRerun(t *testing.T) {
+	failureAction, marker := countingAction(t, true)
+	runner := NewActionRunner("test-check", nil, nil, failureAction, nil,
+		NewNotificationSender(make(chan CheckNotification, 10)), NewEventTracker())
+	runner.RestoreState(&ActionRunnerState{Status: StatusCritical})
+	runner.Failure("still failing after a restart", "event1")
+	waitRuns(t, marker, 0, "same incident across a restart")
+}
+
+// The README's SuccessAction: UnlockOnlyAfterHealthy and no cooldown. It runs on each
+// recovery and on the first healthy result (the runner starts with no result), never
+// again while the check stays healthy. Before Action.Timeout it never ran at all.
+func TestActionRunner_SuccessActionUnlockOnlyAfterHealthy(t *testing.T) {
+	successAction, marker := countingAction(t, true)
+	runner := NewActionRunner("test-check", successAction, nil, nil, nil,
+		NewNotificationSender(make(chan CheckNotification, 10)), NewEventTracker())
+
+	runner.Success("first healthy result", "")
+	waitRuns(t, marker, 1, "first healthy result")
+
+	runner.Success("still healthy", "")
+	waitRuns(t, marker, 1, "still healthy")
+
+	runner.Failure("down", "event1")
+	runner.Success("recovered", "event1")
+	waitRuns(t, marker, 2, "recovery")
+}
+
+// A TimeoutAction with UnlockOnlyAfterHealthy: once per timeout incident.
+func TestActionRunner_TimeoutActionUnlockOnlyAfterHealthy(t *testing.T) {
+	timeoutAction, marker := countingAction(t, true)
+	runner := NewActionRunner("test-check", nil, nil, nil, timeoutAction,
+		NewNotificationSender(make(chan CheckNotification, 10)), NewEventTracker())
+
+	runner.Timeout("timed out", "event1")
+	waitRuns(t, marker, 1, "first timeout")
+
+	runner.Timeout("still timing out", "event1")
+	waitRuns(t, marker, 1, "still timing out: same incident")
+
+	runner.Success("recovered", "event1")
+	runner.Timeout("timed out again", "event2")
+	waitRuns(t, marker, 2, "new timeout incident after recovery")
 }
 
 func TestActionRunner_UnlockAfterDuration(t *testing.T) {
@@ -1108,6 +1200,67 @@ func TestAction_Run_Basic(t *testing.T) {
 	assert.Contains(t, notification.Tags, "run:success")
 	// Should NOT have error tag on success
 	assert.NotContains(t, notification.Tags, "run:error")
+}
+
+// A cooldown of 0 means "may run again any time" (and is what an UnlockOnlyAfterHealthy
+// action, like the README's SuccessAction, naturally leaves): the command must still run.
+// It used to get the cooldown as its run deadline, so 0 cancelled it at once.
+func TestAction_Run_ZeroCooldownStillRuns(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	for _, action := range []Action{
+		{Command: "touch " + marker},
+		{Command: "touch " + marker, UnlockOnlyAfterHealthy: true},
+	} {
+		_ = os.Remove(marker)
+		notification := action.Run("test")
+		assert.Contains(t, notification.Tags, "run:success", notification.Message)
+		_, err := os.Stat(marker)
+		assert.NoError(t, err, "the command must have run")
+	}
+}
+
+// Timeout bounds the command, independent of the cooldown: a hung command is stopped at
+// Timeout even when the cooldown is long.
+func TestAction_Run_TimeoutStopsHungCommand(t *testing.T) {
+	action := Action{
+		Command:             "sleep 30",
+		UnlockAfterDuration: time.Hour,
+		Timeout:             200 * time.Millisecond,
+	}
+	start := time.Now()
+	notification := action.Run("test")
+	assert.Less(t, time.Since(start), 5*time.Second, "Timeout must stop the command, not the 1h cooldown")
+	assert.Contains(t, notification.Tags, "run:error")
+}
+
+// Timeout lets a command run longer than a short cooldown.
+func TestAction_Run_TimeoutOutlastsShortCooldown(t *testing.T) {
+	action := Action{
+		Command:             "sleep 0.3",
+		UnlockAfterDuration: 100 * time.Millisecond,
+		Timeout:             5 * time.Second,
+	}
+	notification := action.Run("test")
+	assert.Contains(t, notification.Tags, "run:success", notification.Message)
+}
+
+func TestAction_RunTimeout(t *testing.T) {
+	cases := []struct {
+		name   string
+		action Action
+		want   time.Duration
+	}{
+		{"timeout set wins", Action{Timeout: 2 * time.Second, UnlockAfterDuration: time.Hour}, 2 * time.Second},
+		{"no timeout: the cooldown, as before Timeout existed", Action{UnlockAfterDuration: 5 * time.Minute}, 5 * time.Minute},
+		{"neither: the default", Action{}, DefaultActionTimeout},
+		{"negative timeout is unset", Action{Timeout: -time.Second}, DefaultActionTimeout},
+		{"negative cooldown is unset", Action{UnlockAfterDuration: -time.Hour}, DefaultActionTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.action.runTimeout())
+		})
+	}
 }
 
 func TestAction_Run_WithEnvVariable(t *testing.T) {
@@ -1904,4 +2057,159 @@ func (m *mockStatePersister) LoadEventTrackerState(ctx context.Context) (*EventT
 
 func (m *mockStatePersister) Close() error {
 	return nil
+}
+
+// A timed-out or initializing check must decide the overall status whatever the order
+// the checks are merged in (they are merged from goroutines: random order). Before the
+// fix any check merged after it, a passing one included, replaced it: a node with a
+// timed-out check could answer 200.
+func TestStatus_AggregationPriority_WorstWinsInAnyOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		set  map[string]Status
+		want Status
+	}{
+		{"timeout beats passing", map[string]Status{"a": StatusTimeout, "b": StatusPassing, "c": StatusPassing, "d": StatusPassing}, StatusTimeout},
+		{"timeout beats warning", map[string]Status{"a": StatusTimeout, "b": StatusWarning, "c": StatusPassing}, StatusTimeout},
+		{"critical beats timeout", map[string]Status{"a": StatusTimeout, "b": StatusCritical, "c": StatusPassing}, StatusCritical},
+		{"initializing beats passing", map[string]Status{"a": StatusInitializing, "b": StatusPassing, "c": StatusPassing}, StatusInitializing},
+		{"initializing beats warning", map[string]Status{"a": StatusInitializing, "b": StatusWarning}, StatusInitializing},
+		{"timeout beats initializing", map[string]Status{"a": StatusInitializing, "b": StatusTimeout}, StatusTimeout},
+		{"warning beats passing", map[string]Status{"a": StatusWarning, "b": StatusPassing, "c": StatusPassing}, StatusWarning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := New()
+			require.NoError(t, err)
+			for name := range tc.set {
+				require.NoError(t, h.Register(CheckConfig{
+					Name:     name,
+					Interval: time.Second,
+					Check:    func(context.Context) CheckResponse { return CheckResponse{} },
+				}))
+			}
+			h.mu.Lock()
+			for name, s := range tc.set {
+				h.checks[name].Status.check.Update(s, nil)
+			}
+			h.mu.Unlock()
+			for i := 0; i < 200; i++ {
+				require.Equal(t, tc.want, h.Status(context.Background()).Status, "iteration %d", i)
+			}
+		})
+	}
+}
+
+func TestHandler_TimedOutCheckAmongPassingIs503(t *testing.T) {
+	h, err := New()
+	require.NoError(t, err)
+	for _, name := range []string{"slow", "a", "b", "c"} {
+		require.NoError(t, h.Register(CheckConfig{
+			Name:     name,
+			Interval: time.Second,
+			Check:    func(context.Context) CheckResponse { return CheckResponse{} },
+		}))
+	}
+	h.mu.Lock()
+	for name, c := range h.checks {
+		if name == "slow" {
+			c.Status.check.Update(StatusTimeout, errors.New(string(StatusTimeout)))
+		} else {
+			c.Status.check.Update(StatusPassing, nil)
+		}
+	}
+	h.mu.Unlock()
+	for i := 0; i < 100; i++ {
+		res := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/status", nil)
+		h.HandlerFunc(res, req)
+		require.Equal(t, http.StatusServiceUnavailable, res.Code, "iteration %d", i)
+	}
+}
+
+// A check that returns an error, through the real check() (not a re-implementation of
+// its branches): critical and 503 without SkipOnErr; warning and 429 with SkipOnErr or
+// IsWarning. The most common production path: a dependency fails outright.
+func TestCheck_ReturnedErrorEndToEnd(t *testing.T) {
+	cases := []struct {
+		name      string
+		skipOnErr bool
+		isWarning bool
+		want      Status
+		code      int
+	}{
+		{"error is critical", false, false, StatusCritical, http.StatusServiceUnavailable},
+		{"error with SkipOnErr is a warning", true, false, StatusWarning, http.StatusTooManyRequests},
+		{"IsWarning is a warning", false, true, StatusWarning, http.StatusTooManyRequests},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := New()
+			require.NoError(t, err)
+			require.NoError(t, h.Register(CheckConfig{
+				Name: "dependency", Interval: time.Second, SkipOnErr: tc.skipOnErr,
+				FailuresBeforeWarning: 1, FailuresBeforeCritical: 1,
+				Check: func(context.Context) CheckResponse {
+					return CheckResponse{Error: errors.New("connection refused"), IsWarning: tc.isWarning}
+				},
+			}))
+			h.mu.Lock()
+			c := h.checks["dependency"]
+			h.mu.Unlock()
+			c.check()
+			// Wait for the check's own result: before it, the status is a synthetic
+			// critical "initializing", which would satisfy the critical case vacuously.
+			require.Eventually(t, func() bool {
+				s, e := c.Status.check.Get()
+				return s == tc.want && e != nil && e.Error() == "connection refused"
+			}, 3*time.Second, 10*time.Millisecond)
+
+			got := h.Status(context.Background())
+			assert.Equal(t, tc.want, got.Status)
+			assert.Equal(t, "connection refused", got.Failures["dependency"])
+			res := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/status", nil)
+			h.HandlerFunc(res, req)
+			assert.Equal(t, tc.code, res.Code)
+		})
+	}
+}
+
+// SkipOnErr covers errors the check returns, never a timeout: a SkipOnErr check that
+// times out records timeout, runs its TimeoutAction (not its WarningAction) and fails
+// the component.
+func TestCheck_SkipOnErrTimeoutFiresTimeoutAction(t *testing.T) {
+	dir := t.TempDir()
+	timeoutFired := filepath.Join(dir, "timeout-action")
+	warningFired := filepath.Join(dir, "warning-action")
+
+	h, err := New()
+	require.NoError(t, err)
+	require.NoError(t, h.Register(CheckConfig{
+		Name: "slow", Interval: time.Second, Timeout: 50 * time.Millisecond, SkipOnErr: true,
+		FailuresBeforeCritical: 1,
+		TimeoutAction:          &Action{Command: "touch " + timeoutFired},
+		WarningAction:          &Action{Command: "touch " + warningFired},
+		Check: func(ctx context.Context) CheckResponse {
+			<-ctx.Done()
+			time.Sleep(100 * time.Millisecond)
+			return CheckResponse{}
+		},
+	}))
+	h.mu.Lock()
+	c := h.checks["slow"]
+	h.mu.Unlock()
+	c.check()
+	require.Eventually(t, func() bool {
+		s, _ := c.Status.check.Get()
+		return s == StatusTimeout
+	}, 3*time.Second, 20*time.Millisecond, "a SkipOnErr check that times out must record timeout")
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(timeoutFired)
+		return err == nil
+	}, 3*time.Second, 20*time.Millisecond, "TimeoutAction must run")
+	_, err = os.Stat(warningFired)
+	assert.True(t, os.IsNotExist(err), "WarningAction must not run for a timeout")
+	// SkipOnErr covers returned errors only: the timeout fails the component.
+	assert.Equal(t, StatusTimeout, h.Status(context.Background()).Status)
 }

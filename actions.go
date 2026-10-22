@@ -8,9 +8,24 @@ import (
 	"time"
 )
 
+// runTimeout is the command's deadline: Timeout when set; else the cooldown when set
+// (Run used the cooldown as its deadline before Timeout existed, so configurations that
+// set only a cooldown keep their behavior); else DefaultActionTimeout. The cooldown alone
+// was the deadline before, so a cooldown of 0 cancelled the command at once.
+func (a Action) runTimeout() time.Duration {
+	switch {
+	case a.Timeout > 0:
+		return a.Timeout
+	case a.UnlockAfterDuration > 0:
+		return a.UnlockAfterDuration
+	default:
+		return DefaultActionTimeout
+	}
+}
+
 // Run executes the action command
 func (a Action) Run(message string) (notification CheckNotification) {
-	ctx, cancel := context.WithTimeout(context.Background(), a.UnlockAfterDuration)
+	ctx, cancel := context.WithTimeout(context.Background(), a.runTimeout())
 	defer cancel()
 
 	notification.Notifiers = a.Notifiers
@@ -266,7 +281,11 @@ func NewActionRunner(checkName string, successAction, warningAction, failureActi
 		timeoutAction: timeoutAction,
 		notifications: notifications,
 		eventTracker:  eventTracker,
-		status:        StatusCritical,
+		// No result yet: neither healthy nor failed, so the first result of any kind
+		// is a transition. Starting in critical made a check that fails from the start
+		// look "already critical": its UnlockOnlyAfterHealthy FailureAction never ran.
+		// A restored runner takes its saved status instead (RestoreState).
+		status: StatusInitializing,
 	}
 }
 

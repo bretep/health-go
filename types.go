@@ -23,8 +23,13 @@ const (
 	// StatusInitializing healthcheck is starting up and has not meet the passing threshold
 	StatusInitializing Status = "initializing"
 	// MinimumInterval is the minimum time between checks
-	// to prevent fork bombing a system
+	// to prevent fork bombing a system; a shorter interval is raised to it
 	MinimumInterval = time.Second
+	// DefaultInterval is the interval of a check registered without one
+	DefaultInterval = 10 * time.Second
+	// DefaultActionTimeout bounds an action's command when neither its Timeout nor its
+	// UnlockAfterDuration is set
+	DefaultActionTimeout = 60 * time.Second
 )
 
 type (
@@ -50,7 +55,8 @@ type (
 		Interval time.Duration
 		// Timeout is the timeout defined for every check.
 		Timeout time.Duration
-		// SkipOnErr if set to true, it will retrieve StatusPassing providing the error message from the failed resource.
+		// SkipOnErr if set to true, an error the check returns gives StatusWarning instead of
+		// StatusCritical (the error message is kept). A timeout is never softened.
 		SkipOnErr bool
 		// Check is the func which executes the check.
 		Check CheckFunc
@@ -196,10 +202,15 @@ type (
 
 	// Action contains configuration for running an action
 	Action struct {
-		Command                string
+		Command string
+		// UnlockAfterDuration is the cooldown: the action runs again only this long
+		// after its last run (0: any time).
 		UnlockAfterDuration    time.Duration
 		UnlockOnlyAfterHealthy bool
-		SendCommandOutput      bool
+		// Timeout bounds the command's run. Unset (0): the cooldown when that is set
+		// (the behavior before Timeout existed), else DefaultActionTimeout.
+		Timeout           time.Duration
+		SendCommandOutput bool
 		// Notifiers list of enabled notifiers
 		Notifiers []string
 
