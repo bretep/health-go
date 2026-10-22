@@ -1,6 +1,6 @@
 module github.com/bretep/health-go/v6
 
-go 1.25
+go 1.27.3
 
 require (
 	github.com/bradfitz/gomemcache v0.0.0-20250403215159-8d39553ac7cf

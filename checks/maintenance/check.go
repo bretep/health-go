@@ -106,13 +106,13 @@ func New(config Config) func(ctx context.Context) health.CheckResponse {
 func parseNotificationDisable(message string) (time.Duration, bool) {
 	const prefix = "HEALTH_GO_DISABLE_NOTIFICATIONS"
 
-	idx := strings.Index(message, prefix)
-	if idx == -1 {
+	_, after, ok := strings.Cut(message, prefix)
+	if !ok {
 		return 0, false
 	}
 
 	// Check for duration suffix: HEALTH_GO_DISABLE_NOTIFICATIONS_300
-	remaining := message[idx+len(prefix):]
+	remaining := after
 	if len(remaining) > 0 && remaining[0] == '_' {
 		// Find the end of the number (next non-digit or end of string)
 		numStr := remaining[1:]

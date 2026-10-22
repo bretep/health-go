@@ -155,7 +155,7 @@ curl localhost:3000/status
   "status": "passing",
   "timestamp": "2024-01-15T10:30:00.000Z",
   "system": {
-    "version": "go1.25.0",
+    "version": "go1.27.3",
     "goroutines_count": 12,
     "total_alloc_bytes": 1234567,
     "heap_objects_count": 5678,
@@ -177,7 +177,7 @@ curl localhost:3000/status
     "rabbitmq": "Failed during rabbitmq health check"
   },
   "system": {
-    "version": "go1.25.0",
+    "version": "go1.27.3",
     "goroutines_count": 12,
     "total_alloc_bytes": 1234567,
     "heap_objects_count": 5678,
@@ -195,7 +195,7 @@ curl localhost:3000/status
     "mongodb": "Failed during mongodb health check"
   },
   "system": {
-    "version": "go1.25.0",
+    "version": "go1.27.3",
     "goroutines_count": 12,
     "total_alloc_bytes": 1234567,
     "heap_objects_count": 5678,

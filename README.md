@@ -13,7 +13,7 @@ v6 is a major modernization release focusing on **stability**, **performance**, 
 
 ### Breaking Changes
 
-- **Go 1.25+ required** - Takes advantage of modern Go features
+- **Go 1.27.3+ required** - Takes advantage of modern Go features
 - **Module path changed** - `github.com/bretep/health-go/v6`
 - **Redis client updated** - Uses `github.com/redis/go-redis/v9` (renamed from `go-redis/redis`)
 
@@ -149,7 +149,7 @@ The library is ~1000 lines of tested, production-hardened code. Writing it yours
 go get github.com/bretep/health-go/v6
 ```
 
-**Requirements:** Go 1.25 or later
+**Requirements:** Go 1.27.3 or later
 
 ## Quick Start
 
@@ -620,7 +620,7 @@ r.HandleFunc("/health", h.HandlerFunc)
   "status": "passing",
   "timestamp": "2024-01-15T10:30:00.000Z",
   "system": {
-    "version": "go1.25.0",
+    "version": "go1.27.3",
     "goroutines_count": 12,
     "total_alloc_bytes": 1234567,
     "heap_objects_count": 5678,
@@ -771,7 +771,7 @@ See the [_examples](https://github.com/bretep/health-go/blob/master/_examples/) 
    // No code changes needed, just `go mod tidy`
    ```
 
-3. Ensure Go 1.25+ is installed
+3. Ensure Go 1.27.3+ is installed
 
 4. Run `go mod tidy` to update dependencies
 

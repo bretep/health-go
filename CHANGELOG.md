@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Go 1.27.3 or later is required** (go.mod `go 1.27.3`); CI tests with Go 1.27.3.
+
 ## v6.2.0 (2026-10-21)
 
 ### Behavior changes

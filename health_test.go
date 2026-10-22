@@ -2093,7 +2093,7 @@ func TestStatus_AggregationPriority_WorstWinsInAnyOrder(t *testing.T) {
 				h.checks[name].Status.check.Update(s, nil)
 			}
 			h.mu.Unlock()
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				require.Equal(t, tc.want, h.Status(context.Background()).Status, "iteration %d", i)
 			}
 		})
@@ -2119,7 +2119,7 @@ func TestHandler_TimedOutCheckAmongPassingIs503(t *testing.T) {
 		}
 	}
 	h.mu.Unlock()
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		res := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", "/status", nil)
 		h.HandlerFunc(res, req)
